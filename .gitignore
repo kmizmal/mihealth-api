@@ -9,3 +9,10 @@ test_*.db*
 *.pyc
 __pycache__/
 .DS_Store
+
+# uv / venv
+.venv/
+venv/
+*.egg-info/
+dist/
+build/

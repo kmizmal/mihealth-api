@@ -6,7 +6,7 @@
 账号登录换取访问凭据 → 按时间窗/增量拉取 → SQLite 归档 → 多维查询与可视化。
 
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![python](https://img.shields.io/badge/python-3.9%2B-blue)](#)
+[![python](https://img.shields.io/badge/python-3.14%2B-blue)](#)
 
 ## 用途
 
@@ -47,26 +47,26 @@
 ## 快速开始
 
 ```bash
-pip install -r requirements.txt          # pycryptodome 可选：RC4 提速 ~40x
+uv sync                                   # 依赖装进 .venv（pycryptodome 提供 RC4 提速 ~40x）
 
 # 放入凭据（提取方法见 API.md §1；有 root 设备也可自动抓取）
 cp config.example.json config.json
-python tools/refresh_credentials.py       # 自动从设备读取并写回 config.json
+uv run python tools/refresh_credentials.py   # 自动从设备读取并写回 config.json
 
 # 1) 首次全量回填 → SQLite（17 个数据键 + 运动记录 + 每日摘要）
-python sync.py backfill
+uv run python sync.py backfill
 
 # 2) 之后定时增量（水位流 + 时间窗补拉，通常只需个位数请求）
-python sync.py incremental
-python sync.py status                     # 游标与库内行数
+uv run python sync.py incremental
+uv run python sync.py status              # 游标与库内行数
 
 # 3) HTTP 网关 + 看板 → http://127.0.0.1:8567（默认读本地库，无库时走实时接口）
-python server.py
+uv run python server.py
 
 # 其它
-python mihealth_client.py                 # 客户端冒烟
-python sync.py export --family fitness --key steps --csv steps.csv
-python tools/export_all.py                # 全量导出 JSON（不落库）
+uv run python mihealth_client.py          # 客户端冒烟
+uv run python sync.py export --family fitness --key steps --csv steps.csv
+uv run python tools/export_all.py         # 全量导出 JSON（不落库）
 ```
 
 ### 同步与存储

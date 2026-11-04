@@ -21,7 +21,8 @@ Paging semantics (measured):
     recent startTime and filter client-side.
   * watermark feeds are forward-only global change streams, per family, 502 cap.
 
-Optional speedup: `pip install pycryptodome` enables C-speed RC4.
+Optional speedup: `uv sync` installs pycryptodome for C-speed RC4 (pure-Python
+fallback is used when the module is absent).
 """
 import base64, hashlib, hmac as _hmac, json, os, random, struct, threading, time
 import urllib.parse
