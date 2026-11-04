@@ -5,7 +5,7 @@
 把**自己账号**里的健康数据同步到本地，提供 HTTP 接口与数据看板：
 账号登录换取访问凭据 → 按时间窗/增量拉取 → SQLite 归档 → 多维查询与可视化。
 
-[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.14%2B-blue)](#)
 
 ## 用途
@@ -245,4 +245,4 @@ config.example.json  # 凭据模板
 
 ## License
 
-MIT。仅供个人数据访问与研究用途。
+GPL-3.0-or-later。仅供个人数据访问与研究用途。
