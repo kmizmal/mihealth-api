@@ -412,7 +412,7 @@ base64 是纯文本、对行规则免疫；若目标环境无 base64，可 `su -
 | `GET /api/fds_url` | FDS 预签名下载（受限于 §6.3，未打通） |
 | `GET /api/overview` | 今日卡片（步数/热量/心率/血氧/最近睡眠/体重/PAI） |
 | `GET /api/series/<key>?hours=24` | 指定键时间序列（默认去重+按时间窗） |
-| `GET /api/fitness/<key>?start=0&end=<ms>` | **全量分钟级** fitness 数据（start<=0 → 翻页到底） |
+| `GET /api/fitness/<key>?start=0&end=<ms>` | **全量分钟级** fitness 数据（库优先；`start<=0`/`full=1` 才翻页到底，裸调用默认近 24h；`limit=` 截断） |
 | `GET /api/medical?start=&end=&key=` | 医疗记录 |
 | `GET /api/project?start=&end=&key=` | 项目数据（睡眠节律等） |
 | `GET /api/stat/<key>?tag=daily&start=&end=` | 统计数据 |
@@ -423,7 +423,7 @@ base64 是纯文本、对行规则免疫；若目标环境无 base64，可 `su -
 | `GET /api/sport_categories` | 运动类别枚举 |
 | `GET /api/max_watermark?type=0..5` | 数据水位 |
 | `GET /api/watermark/<key>?wm=&limit=` | 按水位增量拉取 |
-| `GET /api/latest?keys=steps,sleep` | 各键最新条 |
+| `GET /api/latest?keys=steps,sleep&span=` | 各键最新条（库优先；缺失键并发走 `by_time` 倒序取首条；缓存 20s） |
 | `GET /api/relatives/<sub>?target=&start=&end=` | 亲友数据 |
 | `GET /api/raw/<path>?data=<json>` | 透传任意 app/v1 端点（返回密文原文） |
 | `GET /api/keys` | 全数据键清单 |

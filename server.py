@@ -22,6 +22,7 @@ Routes
   GET  /api/latest /api/relatives/<sub> /api/raw/<path> /api/keys
 """
 import json, os, sys, threading, time
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -334,7 +335,7 @@ def api_sync_run():
             import sync as sync_mod
             importlib.reload(sync_mod)
             S = sync_mod.Syncer(DB_PATH, workers=2, min_interval=0.5,
-                                refresh=sync_mod.try_refresh)
+                                refresh=sync_mod.make_refresh(CFG_PATH))
             n = S.incremental(hours=72)
             S.db.close()
             _sync_job["result"] = {"ok": True, "rows": n}
@@ -701,16 +702,43 @@ def _ms(arg, default=None):
 
 @app.route("/api/fitness/<key>")
 def api_fitness(key):
-    """Raw minute data straight from the cloud (?start=&end=)."""
-    start = _ms("start", 0)
+    """Raw minute data straight from the cloud (?start=&end=&limit=).
+
+    limit truncates the result. Without an explicit start the range defaults to
+    the last 24h so a bare call never triggers a multi-hundred-page backfill.
+    """
+    limit = _ms("limit", 0) or 0
+    raw_start = _ms("start", None)
     end = _ms("end", ms_now())
-    res = client.get_fitness_data_all(key, start, end, max_pages=_ms("pages", 400),
-                                      full_history=start <= 0 or request.args.get("full") == "1")
+
+    # full history only on explicit opt-in; a bare call defaults to 24h so it
+    # can never walk hundreds of pages.
+    full = request.args.get("full") == "1" or (raw_start is not None and raw_start <= 0)
+    start = 0 if full else (raw_start if raw_start else end - 86400000)
+
+    # Serve from the local store when it covers the request — no cloud round-trip.
+    if _store is not None:
+        cap = limit if limit > 0 else 5000
+        rows = _store.rows("fitness", key, start, end, limit=cap,
+                          order="desc" if limit > 0 else "asc")
+        if rows:
+            return jsonify({"ok": True, "key": key, "count": len(rows),
+                            "items": rows, "source": "db",
+                            "has_more": len(rows) >= cap})
+
+    pages = _ms("pages", None)
+    if pages is None:
+        pages = 400 if full else 4
+    res = client.get_fitness_data_all(key, start, end, max_pages=pages,
+                                      full_history=full)
     if res is None:
         return jsonify({"ok": False, "err": "null"})
     items = res["data_list"]
-    return jsonify({"ok": True, "key": key, "count": len(items),
-                    "items": items, "has_more": res.get("has_more")})
+    total = len(items)
+    if limit and limit > 0:
+        items = items[:limit]
+    return jsonify({"ok": True, "key": key, "count": len(items), "total": total,
+                    "items": items, "source": "live", "has_more": res.get("has_more")})
 
 
 @app.route("/api/medical")
@@ -773,8 +801,61 @@ def api_watermark(key):
 
 @app.route("/api/latest")
 def api_latest():
-    keys = (request.args.get("keys") or ",".join(SCALAR_FIELDS)).split(",")
-    return jsonify(client.get_latest_fitness_data([(k, 1) for k in keys]))
+    """Latest single sample per key.
+
+    get_latest_fitness_data rejects every parameter shape we can derive (-8
+    invalid params), so read the newest row per key through by_time instead.
+    """
+    keys = [k.strip() for k in
+            (request.args.get("keys") or ",".join(SCALAR_FIELDS)).split(",") if k.strip()]
+    span = _ms("span", 30 * 86400000)
+    end = ms_now()
+
+    def work():
+        # Local store answers in microseconds; only keys it has never seen go to
+        # the cloud, and those are fetched concurrently. Both paths answer the
+        # same shape: {key, time, sid, parsed}.
+        out, missing = {}, []
+        if _store is not None:
+            for k in keys:
+                rows = _store.rows("fitness", k, end - span, end, limit=1, order="desc")
+                if rows:
+                    row = rows[0]
+                    # store.rows already decodes `value`, so everything except its
+                    # bookkeeping keys is the parsed payload.
+                    out[k] = {"key": row.get("_key", k), "time": row.get("_t"),
+                              "sid": row.get("_sid"),
+                              "parsed": {kk: vv for kk, vv in row.items()
+                                         if kk not in ("_t", "_sid", "_key")}}
+                else:
+                    missing.append(k)
+        else:
+            missing = list(keys)
+
+        if missing:
+            def fetch(k):
+                try:
+                    res = client.get_fitness_data_by_time(k, end - span, end, reverse=True) or {}
+                    items = (res.get("result") or {}).get("data_list") or []
+                    if not items:
+                        return k, None
+                    it = items[0]
+                    try:
+                        parsed = json.loads(it.get("value") or "{}")
+                    except Exception:
+                        parsed = {}
+                    return k, {"key": it.get("key", k), "time": it.get("time"),
+                               "sid": it.get("sid"), "parsed": parsed}
+                except Exception as e:
+                    return k, {"err": str(e)}
+
+            with ThreadPoolExecutor(max_workers=min(8, len(missing))) as ex:
+                for k, val in ex.map(fetch, missing):
+                    out[k] = val
+        return out, ("db" if not missing else "mixed")
+
+    items, src = cached("latest:" + ",".join(keys), 20000, work)
+    return jsonify({"ok": True, "items": items, "source": src})
 
 
 @app.route("/api/sport_categories")
