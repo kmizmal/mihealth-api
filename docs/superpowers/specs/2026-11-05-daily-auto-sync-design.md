@@ -446,7 +446,7 @@ uv run mihealth-api --port 18575
 
 ## 13. 给新会话的开场 prompt（可直接粘贴）
 
-> 仓库 `/root/dsh/_repo`（GitHub `kmizmal/mihealth-api`，HEAD `d5a673b`）。
+> 仓库 `/root/dsh/_repo`（GitHub `kmizmal/mihealth-api`）。本文件随提交 `c1240cb` 入库，开工前先 `git pull` 取到它；HEAD 应 >= `c1240cb`（若已有人实施完，HEAD 会更新）。
 > 请先读 `docs/superpowers/specs/2026-11-05-daily-auto-sync-design.md`，然后按它的 §6 清单实施：
 > 新增 `src/mihealth_api/scheduler.py`，把每日自动增量挂在 `server.py` 的 `lifespan` 上，`MIH_DAILY_SYNC` 控制（默认 04:00，`off` 关闭）。
 > 文档 §5.6 有一个待人确认的问题（关机重开后是否立刻补跑），如果你不确定就按文档的推荐默认执行并明确告诉我。
