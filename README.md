@@ -93,7 +93,7 @@ uv run python tools/export_all.py         # 全量导出 JSON（不落库）
 |---|---|---|
 | **账号密码登录** | 用小米账号（手机号/邮箱/ID）+ 密码走 passport 登录，成功后保存 `passToken`。密码只用于当次请求、**不落盘**。支持图片验证码与**短信/邮箱二次验证（2FA）**：面板会提示验证码发到了哪个通道并给出输入框 | 首次接入 |
 | **免密续期** | 用已保存的 `passToken` 换新 `serviceToken`，不需要密码/设备。passToken 有效期约 1~2 个月，可反复续期 | 日常（token 过期时自动触发） |
-| **从设备导入** | 从已登录 App 的 rooted 设备/模拟器读取会话（含 `passToken`），一条命令完成 | 手上已有登录态 |
+| **从设备导入** | 从已登录 App 的 rooted 设备/模拟器读取会话（含 `passToken`），一条命令完成；也可把 Cookies 库拷到电脑离线解析（见「备用：手动提取」） | 手上已有登录态 |
 
 登完一次之后，`server.py` / `sync.py` 在收到 401 时会**自动免密续期并重试**，
 实测链路：坏 token → `401 -> refreshed via passToken` → 写回新会话 → 数据正常。
@@ -125,20 +125,49 @@ python tools/refresh_credentials.py                  # 从设备导入（含 pas
 
 ### 备用：手动提取
 
-在已登录小米账号的 rooted 设备/模拟器上：
+凭据都躺在一个普通 SQLite 库里（`cookies` 表），**不一定需要 Android 环境** ——
+关键是拿到那个库：
 
-```bash
-adb shell su -c "sqlite3 /data/data/com.mi.health/app_webview/Default/Cookies \
-  'select host_key,name,value from cookies'"
+| 来源 | 做法 |
+|---|---|
+| root 设备 / 模拟器 | `adb shell su -c "sqlite3 /data/data/com.mi.health/app_webview/Default/Cookies 'select host_key,name,value from cookies'"` |
+| 拷到电脑再解析 | 把 `/data/data/com.mi.health/app_webview/Default/Cookies`（连 `-wal`/`-shm` 一起）拉到 PC，用下面的片段读，不依赖 adb 与 root |
+| 已有的 Cookies 备份 | Chromium 系的 `Cookies`、`Cookies.db` 都能直接读；整个 `app_webview` 目录、zip 也行 |
+
+```python
+import sqlite3
+con = sqlite3.connect("file:Cookies?mode=ro&immutable=1", uri=True)
+for host, name, value in con.execute(
+        "select host_key, name, value from cookies order by host_key, name"):
+    print(f"{host}\t{name}\t{value[:40]}")
 ```
+
+> `value` 为空时真实值在 `encrypted_value`：`v10` 开头是 Chromium 旧版加密
+> （`PBKDF2("peanuts", "saltysalt", 1, 16)` 派生密钥、IV 全 `0x20`、AES-128-CBC），可离线解；
+> `v20` 开头绑定 App 与设备，离线解不开。带 `-wal`/`-shm` 的库先整组拷走再只读打开，
+> 否则可能被锁或读到半截。
 
 | 字段 | 位置 |
 |---|---|
-| `serviceToken` | `sts-hlth.io.mi.com` 行（长串） |
+| `serviceToken` | `sts-hlth.io.mi.com` 行（长串 base64） |
 | `cUserId` | 同一行 |
+| `userId` | 同一行（**续期时必需**，见下） |
 | `ssecurity` | `.wear.mi.com.internal.yrn.net` 行 |
+| `passToken` | `.account.xiaomi.com` 行（免密续期用） |
 
 `.hlth.io.mi.com` 行的 `serviceToken` 值为 `miothealth`，是 sid 标记，不参与认证。
+
+**两个必踩的坑：**
+
+1. **Cookie 库里躺着的 `serviceToken` 基本一定过期了**，直接拿去请求会 `401 auth failed`。
+   这不是提取错了，是快照本来就旧。只要同一份库里还有 `passToken`，`python login.py --refresh`
+   就能换新票，不需要密码、不需要设备。
+2. **换票报 `70016 登录验证失败` 时先查 `userId` 有没有带上。** `passToken` 换票要求 cookie 里
+   `passToken / cUserId / userId` 三件齐全，`userId` 是空串时 passport 直接回 70016，
+   **与「票真的过期」返回码完全相同**，极容易误判成 passToken 失效而去走密码+2FA 重登。
+   把 `sts-hlth.io.mi.com` 行的 `userId` 一并写进 `config.json` 再试；能成功就说明票没坏。
+
+`ssecurity` 与 `serviceToken` 必须**同批**写入 —— 续期会同时刷新两者，只更新其中一个必然签名失败。
 
 ## HTTP API（本地网关）
 
