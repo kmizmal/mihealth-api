@@ -14,7 +14,7 @@ sync_state(name, last_ts, last_wm, updated_at) — incremental cursors.
 
 Everything is stdlib sqlite3; safe to open from several processes (WAL).
 """
-import csv, json, os, sqlite3, threading, time
+import csv, io, json, os, sqlite3, threading, time
 
 from .client import SCALAR_FIELDS
 
@@ -313,19 +313,31 @@ class Store:
 
     # ---------------------------------------------------------- export
     def to_csv(self, path, family, key=None, start_ms=None, end_ms=None, dedup=True):
+        """把一族/一键写成 CSV 文件，返回行数。"""
+        text, n = self.to_csv_string(family, key, start_ms, end_ms, dedup=dedup)
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            f.write(text)
+        return n
+
+    def to_csv_string(self, family, key=None, start_ms=None, end_ms=None, dedup=True):
+        """返回 (csv 文本, 行数)。
+
+        与 to_csv 同一份渲染逻辑，只是不落盘 —— 网关直接把它塞进响应体，
+        避免并发写同一个临时文件互相覆盖。
+        """
         rows = self.rows(family, key, start_ms, end_ms, dedup=dedup)
         cols = ["family", "key", "time", "sid"]
         extra = set()
         for r in rows:
             extra.update(k for k in r if not k.startswith("_") and k not in ("time", "sid"))
         extra = sorted(extra)
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.writer(f)
-            w.writerow(cols + extra)
-            for r in rows:
-                vals = [family, key, r.get("_t"), r.get("_sid")]
-                for c in extra:
-                    v = r.get(c)
-                    vals.append(json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
-                w.writerow(vals)
-        return len(rows)
+        buf = io.StringIO(newline="")
+        w = csv.writer(buf)
+        w.writerow(cols + extra)
+        for r in rows:
+            vals = [family, key, r.get("_t"), r.get("_sid")]
+            for c in extra:
+                v = r.get(c)
+                vals.append(json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v)
+            w.writerow(vals)
+        return buf.getvalue(), len(rows)

@@ -439,6 +439,22 @@ base64 是纯文本、对行规则免疫；若目标环境无 base64，可 `su -
 启动：`uv run mihealth-api` → `http://127.0.0.1:8567`（`--host`/`--port` 或 `MIH_HOST`/`MIH_PORT` 覆盖）
 默认**读本地 SQLite**（先跑 `uv run mihealth-sync backfill`）；无库时自动回退实时接口。
 
+框架是 **FastAPI + uvicorn**（v0.3.0 起，原 Flask 版已退役）：
+
+| 项 | 说明 |
+|---|---|
+| 交互式文档 | `/docs`（Swagger UI）、`/redoc`、`/openapi.json` —— **这三个不需要 token** |
+| 热重载 | `--reload`（替代旧 `--debug`；只对 `uvicorn.run("mihealth_api.server:app")` 生效） |
+| 鉴权 | `/api/*` 与 `/mcp` 都要 token：`X-Api-Token: <t>` 或 `Authorization: Bearer <t>`；失败 `401 {"ok":false,"err":"unauthorized"}` |
+| token 来源 | `MIH_API_TOKEN` > `config.json` 的 `api_token` > 首次自动生成并写回 config（0600）；`MIH_API_TOKEN=off` 关闭鉴权 |
+| 免 token | `/`、`/vendor/*`、`/api/login/captcha`（`<img>` 发不出请求头）、`/docs`、`/redoc`、`/openapi.json` |
+| 参数校验 | 非整数的时间/条数参数返回 `422 {"ok":false,"err":"limit 不是整数: 'abc'"}`；**空串仍按缺省处理**（`?start=&end=` 不会 422） |
+| 错误体 | 与旧版一致：`{"ok":false,"err":"..."}`，不套 FastAPI 的 `{"detail": ...}` |
+
+MCP 端点（Streamable HTTP，可选依赖）见 [MCP.md](MCP.md)：`POST /mcp/`，
+7 个工具（`status` / `list_families` / `list_keys` / `query_records` / `aggregate` /
+`latest` / `sync_now`），与 `/api/*` 共用同一个 token 中间件。
+
 | 路由 | 说明 |
 |---|---|
 | `GET /api/health` | 认证状态 + 存储模式 + 行数 |

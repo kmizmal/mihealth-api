@@ -41,7 +41,7 @@
 | 其它 | 亲友数据、登录态刷新、第三方授权通道 |
 
 - 17 种数据键（CloudKey 全集）× 30+ 端点 × 全量历史翻页
-- 交付三件：Python 客户端、Flask HTTP 网关、Web 看板
+- 交付四件：Python 客户端、FastAPI 网关、Web 看板、MCP 端点（可选）
 - 凭证隔离：`config.json` 已 `.gitignore`，不进版本库
 
 ## 快速开始
@@ -66,6 +66,11 @@ uv run mihealth-sync status               # 游标与库内行数
 
 # 3) HTTP 网关 + 看板 → http://127.0.0.1:8567（默认读本地库，无库时走实时接口）
 uv run mihealth-api
+#    交互式接口文档：http://127.0.0.1:8567/docs
+
+# 4) MCP 端点（可选依赖）→ http://127.0.0.1:8567/mcp
+uv sync --extra mcp
+uv run mihealth-api                       # 启动日志多一行 [mcp] streamable-http at /mcp
 
 # 其它
 uv run python -m mihealth_api.client      # 客户端冒烟
@@ -77,7 +82,7 @@ uv run mihealth-export                    # 全量导出 JSON（不落库）
 
 | 命令 | 模块 | 作用 |
 |---|---|---|
-| `mihealth-api` | `mihealth_api.server` | Flask 网关 + 看板 |
+| `mihealth-api` | `mihealth_api.server` | FastAPI 网关 + 看板 + `/mcp` |
 | `mihealth-sync` | `mihealth_api.sync` | backfill / incremental / status / export |
 | `mihealth-login` | `mihealth_api.login` | 密码登录 / passToken 续期 / 2FA |
 | `mihealth-credentials` | `mihealth_api.credentials` | adb 设备或离线 Cookies 库取凭据 |
@@ -197,6 +202,8 @@ for host, name, value in con.execute(
 | §8 | `mihealth_client.py`（即 `mihealth_api/client.py`）的 Python 调用示例 |
 | §9 | 数据真实性说明（单位、增量值、睡眠分期编码、多数据源） |
 
+MCP 端点（面向 AI 客户端的 7 个工具）单独写在 [MCP.md](MCP.md)。
+
 本地网关常用入口（`uv run mihealth-api` 之后）：
 
 ```
@@ -209,7 +216,19 @@ GET  /api/export.csv          任意族/键导出 CSV
 GET  /                        数据看板（含同步按钮与登录面板）
 ```
 
-响应统一 `{ok, items, count, has_more}`。
+响应统一 `{ok, items, count, has_more}`；`/api/*` 需要 token（`X-Api-Token` 或
+`Authorization: Bearer`，见 API.md §7），交互式文档在 `/docs`。
+
+### MCP（让 AI 客户端直接查库）
+
+```bash
+uv sync --extra mcp        # 可选依赖，不装则 /mcp 不存在、其余功能不受影响
+uv run mihealth-api        # http://127.0.0.1:8567/mcp（Streamable HTTP）
+```
+
+7 个工具：`status` `list_families` `list_keys` `query_records` `aggregate` `latest`
+`sync_now`（唯一写操作）。与 `/api/*` 共用同一把 token，客户端配置与工具参数见
+[MCP.md](MCP.md)。
 
 数据键共 17 种：`steps` `calories` `sleep` `heart_rate` `stress` `spo2` `intensity`
 `valid_stand` `energy` `goal` `pai` `blood_pressure` `blood_sugar` `headset` `weight`
@@ -225,7 +244,9 @@ src/mihealth_api/
   credentials.py     # 凭据重取：adb 设备（base64 避开 pty）或离线 Cookies 库
   store.py           # SQLite 存储层（幂等 upsert + 物化去重表 + 游标）
   sync.py            # 同步编排器：backfill / incremental / status / export
-  server.py          # Flask HTTP 网关（看板 + REST 代理 + 登录接口，库优先·实时回退）
+  server.py          # FastAPI 网关（看板 + REST 代理 + 登录接口，库优先·实时回退）
+  mcp_server.py      # MCP 端点（7 个工具，挂 /mcp，需 --extra mcp）
+  runtime.py         # 进程内共享活对象：惰性 Store、客户端单例、后台同步任务
   auth.py            # 401 自愈：passToken 优先，adb 兜底
   export.py          # 全量导出 JSON
   paths.py           # 配置/库/导出目录解析（cwd + 环境变量）
@@ -234,6 +255,7 @@ tests/               # 单元测试（pytest，无网络）
 tools/
   dump_tokens.js     # Frida hook 现场抓 token（需手动装到设备）
 API.md               # 接口文档（认证/协议/端点/网关/客户端/数据口径）
+MCP.md               # MCP 端点：启用、鉴权、客户端配置、7 个工具
 NOTES.md             # 接口与数据结构笔记
 config.example.json  # 凭据模板
 pyproject.toml       # 依赖、构建与控制台脚本（uv 管理，Python >=3.14）
@@ -249,9 +271,10 @@ uv run pytest --cov=mihealth_api    # 带覆盖率（当前 96%）
 uv run pytest -m network            # 只跑标了 network 的用例（默认跳过）
 ```
 
-`tests/` 全部用假客户端 + Flask `test_client`，不读真实 `config.json`、不发请求。
+`tests/` 全部用假客户端 + Starlette `TestClient`，不读真实 `config.json`、不发请求。
 `conftest.py` 提供 `store` / `config.json` / 合成 Cookies 库三个 fixture；
-`tests/test_server.py` 与 `test_server_live.py` 分别覆盖「有本地库」和「无库走实时」两种模式。
+`tests/test_server.py` 与 `test_server_live.py` 分别覆盖「有本地库」和「无库走实时」两种模式，
+`test_auth_middleware.py` 钉住 token 中间件的白名单，`test_mcp_server.py` 覆盖 7 个 MCP 工具。
 
 ## 实现说明
 

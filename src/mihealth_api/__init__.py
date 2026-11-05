@@ -2,7 +2,7 @@
 
 公开入口（都注册成控制台脚本，见 pyproject `[project.scripts]`）:
 
-    mihealth-api          本地网关（Flask）：看板 + REST 代理 + 登录接口
+    mihealth-api          本地网关（FastAPI）：看板 + REST 代理 + 登录接口 + /mcp
     mihealth-sync         同步编排：backfill / incremental / status / export
     mihealth-login        账号登录：密码 / passToken 免密续期 / 2FA
     mihealth-credentials  凭据重取：adb 设备 或 离线 Cookies 库
@@ -12,7 +12,7 @@
 
     from mihealth_api import MiHealthClient, load_config, Store
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .client import (ApiError, AuthError, MiHealthClient, SCALAR_FIELDS,
                      canonical_number, client_from_config, dedup_items, load_config)

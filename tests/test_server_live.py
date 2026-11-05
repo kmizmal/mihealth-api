@@ -6,29 +6,35 @@ import time
 
 import pytest
 
-from test_server import FakeClient, get, post
+from test_server import TOKEN, FakeClient, get, post
 
 
 @pytest.fixture
 def live(tmp_path, monkeypatch):
     """没有数据库、凭据也不全：所有读库接口应当退化到实时调用或报 404。"""
+    from mihealth_api import runtime, server as SV
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MIH_CONFIG", str(tmp_path / "absent.json"))
     monkeypatch.setenv("MIH_DB", str(tmp_path / "absent.db"))
-    from mihealth_api import server as SV
+    monkeypatch.setenv("MIH_API_TOKEN", TOKEN)
     SV = importlib.reload(SV)
     fake = FakeClient()
-    SV.client = fake
+    runtime.reset_store()
+    runtime.reload_config()
+    runtime.set_client(fake)
     SV._cache.clear()
-    SV._store = None
+    SV._TOKEN, SV._AUTH_OFF = TOKEN, False
     SV._login_state.update(session=None, captcha_url=None, username=None,
                            **{"2fa_context": None, "2fa_flag": None})
-    return SV, fake
+    yield SV, fake
+    runtime.reset_store()
+    runtime.reset_client()
 
 
 def test_health_live_mode(live):
     SV, _ = live
-    body = get(live, "/api/health").get_json()
+    body = get(live, "/api/health").json()
     assert body["mode"] == "live" and body["db"] is None
     assert "rows" not in body
 
@@ -40,17 +46,17 @@ def test_health_reports_generic_error(live):
         raise RuntimeError("dns down")
 
     fake.call = boom
-    body = get(live, "/api/health").get_json()
+    body = get(live, "/api/health").json()
     assert body["auth"] == "error" and "dns down" in body["auth_error"]
 
 
 def test_health_reports_syncing(live):
     SV, _ = live
-    SV._sync_job["running"] = True
+    SV._job()._state["running"] = True
     try:
-        assert get(live, "/api/health").get_json()["syncing"] is True
+        assert get(live, "/api/health").json()["syncing"] is True
     finally:
-        SV._sync_job["running"] = False
+        SV._job()._state["running"] = False
 
 
 def test_db_routes_404_in_live_mode(live):
@@ -62,7 +68,7 @@ def test_db_routes_404_in_live_mode(live):
 def test_series_live_passthrough(live):
     SV, fake = live
     fake.fitness = {"steps": [{"time": 1, "sid": "w", "value": '{"steps":5}'}]}
-    body = get(live, "/api/series/steps?hours=24").get_json()
+    body = get(live, "/api/series/steps?hours=24").json()
     assert body["source"] == "live"
     assert body["items"][0]["steps"] == 5
     assert body["items"][0]["_sid"] == "w"
@@ -71,14 +77,14 @@ def test_series_live_passthrough(live):
 def test_series_live_bad_json_does_not_crash(live):
     SV, fake = live
     fake.fitness = {"steps": [{"time": 1, "sid": "w", "value": "not-json"}]}
-    body = get(live, "/api/series/steps?hours=24").get_json()
+    body = get(live, "/api/series/steps?hours=24").json()
     assert body["items"][0]["_t"] == 1
 
 
 def test_series_null_response(live):
     SV, fake = live
     fake.get_fitness_data_all = lambda *a, **k: None
-    body = get(live, "/api/series/steps?hours=24").get_json()
+    body = get(live, "/api/series/steps?hours=24").json()
     assert body["ok"] is False and body["err"] == "null"
 
 
@@ -89,7 +95,7 @@ def test_daily_goals_live(live):
             {"field": 1, "achieved_value": 1, "target_value": 2}]})},
         {"time": 100, "value": json.dumps({"goal_items": []})},
     ]}
-    body = get(live, "/api/daily_goals?days=7").get_json()
+    body = get(live, "/api/daily_goals?days=7").json()
     assert body["ok"] is True and body["count"] == 1      # 同一时刻只留一条
 
 
@@ -99,7 +105,7 @@ def test_daily_goals_live_unknown_field(live):
         {"time": 1, "value": json.dumps({"goal_items": [{"field": 9,
                                                          "achieved_value": 3,
                                                          "target_value": 4}]})}]}
-    body = get(live, "/api/daily_goals").get_json()
+    body = get(live, "/api/daily_goals").json()
     assert body["items"][0]["goals"]["field_9"]["target"] == 4
 
 
@@ -114,7 +120,7 @@ def test_sport_records_live_widens_window(live):
         return {"sport_records": [{"time": 1, "key": "walking", "value": "{}"}]}
 
     fake.get_sport_records_all = fake_all
-    body = get(live, "/api/sport_records?days=30").get_json()
+    body = get(live, "/api/sport_records?days=30").json()
     assert body["source"] == "live" and body["days_used"] == 90
     assert body["items"][0]["_key"] == "walking"
 
@@ -122,7 +128,7 @@ def test_sport_records_live_widens_window(live):
 def test_sport_records_live_all_empty(live):
     SV, fake = live
     fake.get_sport_records_all = lambda *a, **k: {"sport_records": []}
-    body = get(live, "/api/sport_records?days=30").get_json()
+    body = get(live, "/api/sport_records?days=30").json()
     assert body["items"] == [] and body["source"] == "live"
 
 
@@ -130,21 +136,21 @@ def test_sport_types_live(live):
     SV, fake = live
     fake.pages["data/get_sport_records_by_time"] = [
         {"sport_records": [{"time": 1, "key": "walking"}], "has_more": False}]
-    body = get(live, "/api/sport_types").get_json()
+    body = get(live, "/api/sport_types").json()
     assert body["ok"] is True and body["has_more"] is False
 
 
 def test_diet_live(live):
     SV, fake = live
     fake.get_diet_records_by_time = lambda s, e: {"diet_records": [{"time": 1}]}
-    body = get(live, "/api/diet?days=3").get_json()
+    body = get(live, "/api/diet?days=3").json()
     assert body["source"] == "live" and body["items"] == [{"time": 1}]
 
 
 def test_fitness_live_passthrough_with_limit(live):
     SV, fake = live
     fake.fitness = {"stress": [{"time": i, "value": "{}"} for i in range(5)]}
-    body = get(live, "/api/fitness/stress?pages=1&limit=2").get_json()
+    body = get(live, "/api/fitness/stress?pages=1&limit=2").json()
     assert body["source"] == "live" and body["total"] == 5 and len(body["items"]) == 2
 
 
@@ -172,7 +178,7 @@ def test_latest_live_fetches_missing_keys(live):
     fake.get_fitness_data_by_time = lambda k, s, e, reverse=True, next_key=None: {
         "result": {"data_list": [{"key": k, "time": 5, "sid": "w",
                                   "value": json.dumps({k: 7})}]}}
-    body = get(live, "/api/latest?keys=steps,spo2").get_json()
+    body = get(live, "/api/latest?keys=steps,spo2").json()
     assert body["source"] == "db" or body["source"] == "mixed" or body["source"] == "db"
     assert body["items"]["steps"]["parsed"]["steps"] == 7
 
@@ -186,7 +192,7 @@ def test_latest_live_empty_and_error(live):
         raise RuntimeError("upstream 500")
 
     fake.get_fitness_data_by_time = partial
-    body = get(live, "/api/latest?keys=steps,spo2").get_json()
+    body = get(live, "/api/latest?keys=steps,spo2").json()
     assert body["items"]["steps"] is None
     assert "upstream 500" in body["items"]["spo2"]["err"]
 
@@ -216,16 +222,21 @@ def test_db_family_seconds_param(tmp_path, monkeypatch):
     st.upsert("fitness", "steps", [{"time": 1000, "sid": "w",
                                     "value": json.dumps({"steps": 5})}])
     st.close()
+    from mihealth_api import runtime
     monkeypatch.setenv("MIH_CONFIG", str(tmp_path / "absent.json"))
     monkeypatch.setenv("MIH_DB", str(db))
+    monkeypatch.setenv("MIH_API_TOKEN", TOKEN)
     SV = importlib.reload(SV)
-    SV.client = FakeClient()
+    runtime.reset_store()
+    runtime.reload_config()
+    runtime.set_client(FakeClient())
     SV._cache.clear()
+    SV._TOKEN, SV._AUTH_OFF = TOKEN, False
     body = get((SV, None), "/api/db/fitness?key=steps&start=1000&end=2000&seconds=1"
-               ).get_json()
+               ).json()
     assert body["count"] == 1
     empty = get((SV, None), "/api/db/fitness?key=steps&start=1&end=2&seconds=1"
-                ).get_json()
+                ).json()
     assert empty["count"] == 0
 
 
@@ -237,13 +248,13 @@ def test_sync_job_error_branches(live, monkeypatch):
             raise RuntimeError("cannot create")
 
     monkeypatch.setattr("mihealth_api.sync.Syncer", Boom)
-    assert post(live, "/api/sync").get_json()["ok"] is True
+    assert post(live, "/api/sync").json()["ok"] is True
     for _ in range(100):
-        if not SV._sync_job["running"]:
+        if not SV._job()._state["running"]:
             break
         time.sleep(0.02)
-    assert SV._sync_job["result"]["ok"] is False
-    assert "cannot create" in SV._sync_job["result"]["err"]
+    assert SV._job()._state["result"]["ok"] is False
+    assert "cannot create" in SV._job()._state["result"]["err"]
 
 
 def test_sync_job_auth_exit(live, monkeypatch):
@@ -253,16 +264,16 @@ def test_sync_job_auth_exit(live, monkeypatch):
         def __init__(self, *a, **k):
             self.db = type("D", (), {"close": lambda s: None})()
 
-        def incremental(self, hours=72):
+        def incremental(self, hours=72, families=None):
             raise SystemExit(2)
 
     monkeypatch.setattr("mihealth_api.sync.Syncer", ExitSyncer)
     post(live, "/api/sync")
     for _ in range(100):
-        if not SV._sync_job["running"]:
+        if not SV._job()._state["running"]:
             break
         time.sleep(0.02)
-    assert "auth/credentials" in SV._sync_job["result"]["err"]
+    assert "auth/credentials" in SV._job()._state["result"]["err"]
 
 
 def test_captcha_proxies_image(live, monkeypatch):
@@ -278,7 +289,7 @@ def test_captcha_proxies_image(live, monkeypatch):
 
     SV._login_state.update(session=Sess(), captcha_url="/passport/captcha")
     r = get(live, "/api/login/captcha")
-    assert r.status_code == 200 and r.data.startswith(b"\xff\xd8")
+    assert r.status_code == 200 and r.content.startswith(b"\xff\xd8")
     assert r.headers["Content-Type"].startswith("image/png")
 
 
@@ -288,7 +299,7 @@ def test_2fa_finish_requires_service_token(live, monkeypatch):
     monkeypatch.setattr("mihealth_api.login.finish_2fa",
                         lambda *a, **k: {"ssecurity": "S", "cuser_id": "C"})
     r = post(live, "/api/login", json={"code": "1"})
-    assert r.status_code == 400 and "未取得 serviceToken" in r.get_json()["err"]
+    assert r.status_code == 400 and "未取得 serviceToken" in r.json()["err"]
 
 
 def test_2fa_finish_error(live, monkeypatch):
@@ -298,7 +309,7 @@ def test_2fa_finish_error(live, monkeypatch):
     monkeypatch.setattr("mihealth_api.login.finish_2fa",
                         lambda *a, **k: (_ for _ in ()).throw(LoginError("码错了", code=1)))
     r = post(live, "/api/login", json={"code": "1"})
-    body = r.get_json()
+    body = r.json()
     assert r.status_code == 400 and body["need_2fa"] is True and body["code"] == 1
 
 
@@ -311,7 +322,7 @@ def test_2fa_trigger_failure(live, monkeypatch):
     monkeypatch.setattr("mihealth_api.login.start_2fa",
                         lambda *a, **k: (_ for _ in ()).throw(LoginError("短信通道不可用")))
     r = post(live, "/api/login", json={"username": "u", "password": "p"})
-    assert r.status_code == 400 and "触发二次验证失败" in r.get_json()["err"]
+    assert r.status_code == 400 and "触发二次验证失败" in r.json()["err"]
 
 
 def test_password_login_generic_failure(live, monkeypatch):
@@ -321,7 +332,7 @@ def test_password_login_generic_failure(live, monkeypatch):
     monkeypatch.setattr("mihealth_api.login.login_with_password",
                         lambda *a, **k: (_ for _ in ()).throw(LoginError("账号不存在", code=1)))
     r = post(live, "/api/login", json={"username": "u", "password": "p"})
-    assert r.status_code == 400 and r.get_json()["err"] == "账号不存在"
+    assert r.status_code == 400 and r.json()["err"] == "账号不存在"
     assert SV._login_state["session"] is None
 
 
@@ -331,7 +342,7 @@ def test_password_login_without_token(live, monkeypatch):
     monkeypatch.setattr("mihealth_api.login.login_with_password",
                         lambda *a, **k: {"ssecurity": "S", "cuser_id": "C"})
     r = post(live, "/api/login", json={"username": "u", "password": "p"})
-    assert r.status_code == 400 and "未取得 serviceToken" in r.get_json()["err"]
+    assert r.status_code == 400 and "未取得 serviceToken" in r.json()["err"]
 
 
 def test_raw_without_data_param(live):

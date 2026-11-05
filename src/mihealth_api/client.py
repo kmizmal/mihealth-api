@@ -583,6 +583,8 @@ def load_config(path=None):
         "db": cfg.get("db"),
         "min_interval": float(cfg.get("min_interval") or 0.0),
         "proxies": cfg.get("proxies") or None,
+        # 网关鉴权用（server.init_token 读它）；不进 MiHealthClient
+        "api_token": cfg.get("api_token"),
         "config_path": cand,
     }
 

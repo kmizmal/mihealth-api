@@ -1,6 +1,6 @@
 [project]
 name = "mihealth-api"
-version = "0.2.0"
+version = "0.3.0"
 description = "小米运动健康（com.mi.health）云端数据客户端、同步器与本地 HTTP 网关"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -10,10 +10,15 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
-    "flask>=3.1",
+    "fastapi>=0.162",
+    "uvicorn>=0.54",
     "pycryptodome>=4.3",
     "requests>=2.34",
 ]
+
+[project.optional-dependencies]
+# MCP 传输层：只在要挂 /mcp 时才需要（会额外拖进 ~28 个包）
+mcp = ["mcp>=2.3.0"]
 
 [project.scripts]
 mihealth-api = "mihealth_api:main"
@@ -26,6 +31,9 @@ mihealth-export = "mihealth_api.export:main"
 dev = [
     "pytest>=9.0",
     "pytest-cov>=7.0",
+    "httpx>=0.28",
+    # 测试要真跑 MCP 用例，不能 importorskip 静默跳过
+    "mcp>=2.3.0",
 ]
 
 [build-system]

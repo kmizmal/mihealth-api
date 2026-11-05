@@ -177,7 +177,8 @@ def test_server_latest_concurrent_fetch(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MIH_CONFIG", str(tmp_path / "absent.json"))
     monkeypatch.setenv("MIH_DB", str(tmp_path / "absent.db"))
-    from mihealth_api import server as SV
+    from mihealth_api import runtime, server as SV
+    monkeypatch.setenv("MIH_API_TOKEN", "test-token")
     SV = importlib.reload(SV)
 
     class Cl:
@@ -185,10 +186,16 @@ def test_server_latest_concurrent_fetch(tmp_path, monkeypatch):
             return {"result": {"data_list": [{"key": k, "time": 1, "sid": "w",
                                               "value": json.dumps({k: 1})}]}}
 
-    SV.client = Cl()
+    runtime.reset_store()
+    runtime.reload_config()
+    runtime.set_client(Cl())
+    SV._TOKEN, SV._AUTH_OFF = "test-token", False
     SV._cache.clear()
-    body = SV.app.test_client().get("/api/latest?keys=steps,spo2,stress").get_json()
+    from fastapi.testclient import TestClient
+    body = TestClient(SV.app, headers={"X-Api-Token": "test-token"}).get(
+        "/api/latest?keys=steps,spo2,stress").json()
     assert set(body["items"]) == {"steps", "spo2", "stress"}
+    runtime.reset_client()
 
 
 @pytest.fixture
