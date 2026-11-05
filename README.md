@@ -16,13 +16,13 @@
 - 与小米公司无任何关联，不是官方开放 API（官方通道为 `pv.hlthopen.io.mi.com`，需注册 OAuth client_id）
 - 请遵守适用法律与平台条款使用
 
-![dashboard](static/screenshot.png)
+![dashboard](src/mihealth_api/static/screenshot.png)
 
 看板包含：今日目标环（步数/热量/活动/站立达成率）、关键指标卡（含迷你趋势与较昨日环比）、
 步数趋势与周对比、心率/血氧曲线、**睡眠分期时间轴**（深睡/浅睡/REM 逐段着色 + 近 7 晚对比）、
 运动记录（类型徽章、配速、训练效果）；支持深/浅色主题与一键同步。睡眠分期配色见下图：
 
-![sleep](static/sleep.png)
+![sleep](src/mihealth_api/static/sleep.png)
 
 ---
 
@@ -51,26 +51,40 @@
 ```bash
 uv sync                                   # 依赖装进 .venv（pycryptodome 提供 RC4 提速 ~40x）
 
-# 放入凭据（提取方法见 API.md §1；有 root 设备也可自动抓取）
+# 放入凭据（提取方法见 API.md §1）
 cp config.example.json config.json
-uv run python tools/refresh_credentials.py   # 从设备读取并写回（含 passToken）
-# 或者：已有 Cookies 库/备份时 → uv run python login.py --refresh（见「备用：手动提取」）
+uv run mihealth-credentials               # 从 root 设备抓（含 passToken）
+uv run mihealth-credentials --db Cookies.db   # 或：离线解析已拷出来的 Cookies 库
+# 已有 Cookies 库里的 passToken → uv run mihealth-login --refresh（见「备用：手动提取」）
 
 # 1) 首次全量回填 → SQLite（17 个数据键 + 运动记录 + 每日摘要）
-uv run python sync.py backfill
+uv run mihealth-sync backfill
 
 # 2) 之后定时增量（水位流 + 时间窗补拉，通常只需个位数请求）
-uv run python sync.py incremental
-uv run python sync.py status              # 游标与库内行数
+uv run mihealth-sync incremental
+uv run mihealth-sync status               # 游标与库内行数
 
 # 3) HTTP 网关 + 看板 → http://127.0.0.1:8567（默认读本地库，无库时走实时接口）
-uv run python server.py
+uv run mihealth-api
 
 # 其它
-uv run python mihealth_client.py          # 客户端冒烟
-uv run python sync.py export --family fitness --key steps --csv steps.csv
-uv run python tools/export_all.py         # 全量导出 JSON（不落库）
+uv run python -m mihealth_api.client      # 客户端冒烟
+uv run mihealth-sync export --family fitness --key steps --csv steps.csv
+uv run mihealth-export                    # 全量导出 JSON（不落库）
 ```
+
+五个命令对应 `pyproject.toml` 的 `[project.scripts]`，也可以 `uv run python -m mihealth_api.<模块>` 调用：
+
+| 命令 | 模块 | 作用 |
+|---|---|---|
+| `mihealth-api` | `mihealth_api.server` | Flask 网关 + 看板 |
+| `mihealth-sync` | `mihealth_api.sync` | backfill / incremental / status / export |
+| `mihealth-login` | `mihealth_api.login` | 密码登录 / passToken 续期 / 2FA |
+| `mihealth-credentials` | `mihealth_api.credentials` | adb 设备或离线 Cookies 库取凭据 |
+| `mihealth-export` | `mihealth_api.export` | 全量导出 JSON |
+
+**凭据与数据库按「当前工作目录」解析**（`./config.json`、`./mihealth.db`、`./export/`），
+也可用 `--config` / `--db` / `--out`，或环境变量 `MIH_CONFIG` / `MIH_DB` / `MIH_EXPORT_DIR` 覆盖。
 
 ### 同步与存储
 
@@ -88,7 +102,7 @@ uv run python tools/export_all.py         # 全量导出 JSON（不落库）
 
 ## 登录 / 会话（三种方式）
 
-![login](static/login.png)
+![login](src/mihealth_api/static/login.png)
 
 网页看板右上角 **登录** 按钮提供三条路径，都不需要每次都碰模拟器：
 
@@ -98,15 +112,15 @@ uv run python tools/export_all.py         # 全量导出 JSON（不落库）
 | **免密续期** | 用已保存的 `passToken` 换新 `serviceToken`，不需要密码/设备。passToken 有效期约 1~2 个月，可反复续期 | 日常（token 过期时自动触发） |
 | **从设备导入** | 从已登录 App 的 rooted 设备/模拟器读取会话（含 `passToken`），一条命令完成；也可把 Cookies 库拷到电脑离线解析（见「备用：手动提取」） | 手上已有登录态 |
 
-登完一次之后，`server.py` / `sync.py` 在收到 401 时会**自动免密续期并重试**，
+登完一次之后，网关与同步器在收到 401 时会**自动免密续期并重试**，
 实测链路：坏 token → `401 -> refreshed via passToken` → 写回新会话 → 数据正常。
 
 命令行等价：
 
 ```bash
-uv run python login.py --user <小米账号> --password <密码>   # 首次（密码不留存）
-uv run python login.py --refresh                            # 之后免密续期
-uv run python tools/refresh_credentials.py                  # 从设备导入（含 passToken）
+uv run mihealth-login --user <小米账号> --password <密码>   # 首次（密码不留存）
+uv run mihealth-login --refresh                            # 之后免密续期
+uv run mihealth-credentials                                # 从设备导入（含 passToken）
 ```
 
 > 落盘内容只有 `ssecurity / service_token / cuser_id / user_id / pass_token / session_at`（`config.json`，权限 600）。
@@ -163,7 +177,7 @@ for host, name, value in con.execute(
 **两个必踩的坑：**
 
 1. **Cookie 库里躺着的 `serviceToken` 基本一定过期了**，直接拿去请求会 `401 auth failed`。
-   这不是提取错了，是快照本来就旧。只要同一份库里还有 `passToken`，`uv run python login.py --refresh`
+   这不是提取错了，是快照本来就旧。只要同一份库里还有 `passToken`，`uv run mihealth-login --refresh`
    就能换新票，不需要密码、不需要设备。
 2. **换票报 `70016 登录验证失败` 时先查 `userId` 有没有带上。** `passToken` 换票要求 cookie 里
    `passToken / cUserId / userId` 三件齐全，`userId` 是空串时 passport 直接回 70016，
@@ -179,11 +193,11 @@ for host, name, value in con.execute(
 | API.md | 内容 |
 |---|---|
 | §1–6 | 小米云端 `hlth.io.mi.com/app/v1/` 原生接口：认证四件套、RC4 签名协议、端点目录、账号登录、凭证刷新、附加数据族 |
-| §7 | 本仓库 `server.py` 的**本地网关**：`/api/*` 全部路由、多维查询与服务端聚合用法 |
-| §8 | `mihealth_client.py` 的 Python 调用示例 |
+| §7 | 本仓库 `mihealth_api/server.py` 的**本地网关**：`/api/*` 全部路由、多维查询与服务端聚合用法 |
+| §8 | `mihealth_client.py`（即 `mihealth_api/client.py`）的 Python 调用示例 |
 | §9 | 数据真实性说明（单位、增量值、睡眠分期编码、多数据源） |
 
-本地网关常用入口（`uv run python server.py` 之后）：
+本地网关常用入口（`uv run mihealth-api` 之后）：
 
 ```
 GET  /api/health              认证状态 + 存储模式 + 行数
@@ -204,23 +218,27 @@ GET  /                        数据看板（含同步按钮与登录面板）
 ## 目录
 
 ```
-mihealth_client.py   # Python 客户端 + crypto（重试/限流/去重/水位/区域/401 自愈）
-login.py             # 小米账号登录（passport→STS）：密码 / passToken 免密 / 2FA
-store.py             # SQLite 存储层（幂等 upsert + 物化去重表 + 游标）
-sync.py              # 同步编排器：backfill / incremental / status / export
-server.py            # Flask HTTP 网关（看板 + REST 代理 + 登录接口，库优先·实时回退）
-static/              # index.html + Chart.js + 看板截图
+src/mihealth_api/
+  __init__.py        # 包入口 + 公开 API（MiHealthClient / Store / load_config ...）
+  client.py          # Python 客户端 + crypto（签名/RC4/重试/限流/去重/水位/401 自愈）
+  login.py           # 小米账号登录（passport→STS）：密码 / passToken 免密 / 2FA
+  credentials.py     # 凭据重取：adb 设备（base64 避开 pty）或离线 Cookies 库
+  store.py           # SQLite 存储层（幂等 upsert + 物化去重表 + 游标）
+  sync.py            # 同步编排器：backfill / incremental / status / export
+  server.py          # Flask HTTP 网关（看板 + REST 代理 + 登录接口，库优先·实时回退）
+  auth.py            # 401 自愈：passToken 优先，adb 兜底
+  export.py          # 全量导出 JSON
+  paths.py           # 配置/库/导出目录解析（cwd + 环境变量）
+  static/            # index.html + Chart.js + 看板截图（随包分发）
+tests/               # 单元测试（pytest，无网络）
 tools/
-  refresh_credentials.py  # adb 自动重取凭据（含 passToken；base64 传输避开 pty 污染）
-  export_all.py           # 全量导出 JSON
-  dump_tokens.js          # Frida hook 现场抓 token
+  dump_tokens.js     # Frida hook 现场抓 token（需手动装到设备）
 API.md               # 接口文档（认证/协议/端点/网关/客户端/数据口径）
 NOTES.md             # 接口与数据结构笔记
 config.example.json  # 凭据模板
-pyproject.toml       # 依赖与构建（uv 管理，Python >=3.14）
+pyproject.toml       # 依赖、构建与控制台脚本（uv 管理，Python >=3.14）
 uv.lock              # 锁定版本，复现用 uv sync --frozen
 .python-version      # 3.15
-src/mihealth_api/    # 预留包骨架
 ```
 
 ## 实现说明

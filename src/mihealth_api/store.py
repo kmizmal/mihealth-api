@@ -16,7 +16,7 @@ Everything is stdlib sqlite3; safe to open from several processes (WAL).
 """
 import csv, json, os, sqlite3, threading, time
 
-from mihealth_client import SCALAR_FIELDS
+from .client import SCALAR_FIELDS
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS records(

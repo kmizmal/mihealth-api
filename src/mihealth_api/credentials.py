@@ -11,15 +11,14 @@ The app keeps its session in the WebView cookie DB, which is plain SQLite:
 Requires: adb on PATH (or config `adb_path`), root on the device, and the app
 to have been launched at least once with a signed-in account.
 
-  python tools/refresh_credentials.py            # update config.json
-  python tools/refresh_credentials.py --print     # print only
-  python tools/refresh_credentials.py --serial emulator-5554
+  mihealth-credentials            # update config.json
+  mihealth-credentials --print     # print only
+  mihealth-credentials --serial emulator-5554
+  mihealth-credentials --db Cookies.db   # offline: parse a pulled Cookies SQLite file
 """
 import argparse, json, os, sqlite3, subprocess, sys, tempfile, time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-sys.path.insert(0, ROOT)
+from . import paths
 
 PKG = "com.mi.health"
 COOKIE_DB = f"/data/data/{PKG}/app_webview/Default/Cookies"
@@ -129,10 +128,34 @@ def fetch_from_device(serial=None, adb=None):
             with open(base + suffix, "wb") as f:
                 f.write(side)
 
-    db = sqlite3.connect(base)
-    rows = db.execute("SELECT host_key,name,value FROM cookies").fetchall()
-    db.close()
+    return parse_cookie_db(base)
 
+
+def read_cookie_rows(db_path):
+    """Open a Cookies SQLite file read-only and return (host_key, name, value)."""
+    uri = f"file:{os.path.abspath(db_path)}?mode=ro&immutable=1"
+    db = sqlite3.connect(uri, uri=True)
+    try:
+        return db.execute("SELECT host_key,name,value FROM cookies").fetchall()
+    finally:
+        db.close()
+
+
+def parse_cookie_db(db_path):
+    """Extract Mi Health credentials from a Cookies SQLite file.
+
+    Works on a file copied off a device *or* any backup of the WebView cookie
+    store, so no adb/root is needed when you already have the file.
+    """
+    return creds_from_rows(read_cookie_rows(db_path))
+
+
+def creds_from_rows(rows):
+    """Map cookie rows -> {'ssecurity','service_token','cuser_id','user_id','pass_token'}.
+
+    host_key decides where a value is trusted; bare `name` matches are the
+    fallback for cookie stores that lost their host column.
+    """
     creds = {"service_token": None, "cuser_id": None, "ssecurity": None,
              "user_id": None, "pass_token": None}
     for host, name, value in rows:
@@ -162,7 +185,7 @@ def fetch_from_device(serial=None, adb=None):
 
 
 def write_config(creds, path=None):
-    path = path or os.path.join(ROOT, "config.json")
+    path = path or paths.config_path()
     cfg = {}
     if os.path.exists(path):
         try:
@@ -184,15 +207,19 @@ def write_config(creds, path=None):
     return path
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description="refresh Mi Health credentials from device")
     ap.add_argument("--serial")
     ap.add_argument("--adb")
     ap.add_argument("--config")
     ap.add_argument("--print", action="store_true", dest="print_only")
-    a = ap.parse_args()
+    ap.add_argument("--db", help="离线模式：直接解析已拷出来的 Cookies SQLite 文件")
+    a = ap.parse_args(argv)
     try:
-        creds = fetch_from_device(a.serial, a.adb)
+        if a.db:
+            creds = parse_cookie_db(a.db)
+        else:
+            creds = fetch_from_device(a.serial, a.adb)
     except Exception as e:
         print("FAILED:", e, file=sys.stderr)
         return 1

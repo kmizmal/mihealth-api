@@ -553,9 +553,9 @@ class MiHealthClient:
 # ---------------------------------------------------------------- config
 
 def load_config(path=None):
-    """Credentials: explicit path > ./config.json > env MIH_*."""
+    """Credentials: explicit path > $MIH_CONFIG > ./config.json > env MIH_*."""
     cfg = {}
-    cand = path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    cand = path or os.environ.get("MIH_CONFIG") or os.path.join(os.getcwd(), "config.json")
     try:
         with open(cand, encoding="utf-8") as f:
             cfg = json.load(f)
@@ -591,16 +591,30 @@ def client_from_config(cfg=None, **kw):
     return MiHealthClient(cfg["ssecurity"], cfg["service_token"], cfg["cuser_id"], **params)
 
 
-if __name__ == "__main__":
-    cfg = load_config()
+def main(argv=None):
+    """客户端冒烟测试：读一天的数据，确认凭据与签名链路可用。"""
+    import argparse
+    ap = argparse.ArgumentParser(description="Mi Health 客户端冒烟测试")
+    ap.add_argument("--config")
+    ap.add_argument("--keys", default="steps,heart_rate,sleep,spo2,calories")
+    a = ap.parse_args(argv)
+    cfg = load_config(a.config)
     C = client_from_config(cfg)
     now = int(time.time() * 1000)
     day = 86400000
     print(f"host={C.base}  pycryptodome={'yes' if _ARC4 else 'no'}")
-    for key in ["steps", "heart_rate", "sleep", "spo2", "calories"]:
+    bad = 0
+    for key in [k.strip() for k in a.keys.split(",") if k.strip()]:
         try:
             r = C.get_fitness_data_all(key, now - day, now)
             items = r["data_list"]
-            print(f"[{key}] items={len(items)}" + (f"  last={items[-1].get('value','')[:90]}" if items else ""))
+            print(f"[{key}] items={len(items)}"
+                  + (f"  last={items[-1].get('value', '')[:90]}" if items else ""))
         except Exception as e:
+            bad += 1
             print(f"[{key}] ERR {e}")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

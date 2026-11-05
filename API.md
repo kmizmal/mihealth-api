@@ -361,7 +361,7 @@ if (XMPassportSettings.getPassWordEncryptor() == null)      // 无 EUI 加密器
 1. **`passToken` 免密续期**（首选，无密码无设备）：
 
    ```bash
-   uv run python login.py --refresh
+   uv run mihealth-login --refresh
    ```
 
    内部是一次 `serviceLogin`（带 `passToken / cUserId / userId` 三个 cookie）→ 读 `location`
@@ -370,14 +370,14 @@ if (XMPassportSettings.getPassWordEncryptor() == null)      // 无 EUI 加密器
    `sqlite3 /data/data/com.mi.health/app_webview/Default/Cookies 'select host_key,name,value from cookies'`
    取 `sts-hlth.io.mi.com` 行 `serviceToken`/`cUserId`/`userId` + `.wear.mi.com.internal.yrn.net`
    行 `ssecurity` 更新配置。**`.hlth.io.mi.com` 行的 `serviceToken` 是 sid 标记，不要用。**
-3. **账号密码登录**（`uv run python login.py --user <账号> --password <密码>`，可能触发验证码/2FA）。
+3. **账号密码登录**（`uv run mihealth-login --user <账号> --password <密码>`，可能触发验证码/2FA）。
 
-自动化：`server.py` / `sync.py` 注册了 `on_auth_error` 钩子，收到 401 时**先免密续期**、
+自动化：网关与同步器都注册了 `on_auth_error` 钩子（`mihealth_api/auth.py`），收到 401 时**先免密续期**、
 失败再回落到 adb 导入，成功后**自动重试当次请求**（`[auth] refreshed via passToken`）。
 
 > `ssecurity` 与 `serviceToken` 必须**同批**写入 —— 续期会同时刷新两者，只更新其一必然签名失败。
 
-### 5.2 adb 自动重取（`tools/refresh_credentials.py`，实测坑）
+### 5.2 adb 自动重取（`mihealth_api/credentials.py`，实测坑）
 
 `adb exec-out su -c "cat <file>"` **不能用**：`su` 会把命令放进 pty 执行，终端行规则把文件里的
 `\n` 改写成 `\r\n`——36864 字节的 SQLite 文件会到达 36887 字节、页边界错位，SQLite 报
@@ -436,8 +436,8 @@ base64 是纯文本、对行规则免疫；若目标环境无 base64，可 `su -
 
 ## 7. 本地网关 API（server.py，推荐项目直接对接）
 
-启动：`uv run python server.py` → `http://127.0.0.1:8567`（端口可用 `MIH_PORT` 覆盖）
-默认**读本地 SQLite**（先跑 `uv run python sync.py backfill`）；无库时自动回退实时接口。
+启动：`uv run mihealth-api` → `http://127.0.0.1:8567`（`--host`/`--port` 或 `MIH_HOST`/`MIH_PORT` 覆盖）
+默认**读本地 SQLite**（先跑 `uv run mihealth-sync backfill`）；无库时自动回退实时接口。
 
 | 路由 | 说明 |
 |---|---|
@@ -506,13 +506,13 @@ base64 是纯文本、对行规则免疫；若目标环境无 base64，可 `su -
 
 ---
 
-## 8. Python 客户端（mihealth_client.py）
+## 8. Python 客户端（`mihealth_api/client.py`）
 
 依赖统一由 uv 管理（`uv sync` 建 `.venv`，`uv run` 执行，不手工 pip）：
 
 ```python
-from mihealth_client import MiHealthClient, load_config, client_from_config
-cfg = load_config()                       # config.json > 环境变量 MIH_*
+from mihealth_api import MiHealthClient, load_config, client_from_config
+cfg = load_config()                       # ./config.json（或 MIH_CONFIG）> 环境变量 MIH_*
 C = client_from_config(cfg)               # 含区域/限流/重试/401 钩子
 
 # 增量：水位流（返回 items, 最新水位, has_more）
@@ -522,7 +522,7 @@ wm_now = C.get_max_watermark(0)           # 播种游标
 
 ```python
 # 旧式直连（保留兼容）
-from mihealth_client import MiHealthClient
+from mihealth_api import MiHealthClient
 C = MiHealthClient(SSECURITY, SERVICE_TOKEN, CUSER_ID)
 
 # 窗口查询（自动翻页+窗口过滤）

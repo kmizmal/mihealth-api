@@ -1,7 +1,7 @@
 [project]
 name = "mihealth-api"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "小米运动健康（com.mi.health）云端数据客户端、同步器与本地 HTTP 网关"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
@@ -17,7 +17,28 @@ dependencies = [
 
 [project.scripts]
 mihealth-api = "mihealth_api:main"
+mihealth-sync = "mihealth_api.sync:main"
+mihealth-login = "mihealth_api.login:main"
+mihealth-credentials = "mihealth_api.credentials:main"
+mihealth-export = "mihealth_api.export:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0",
+    "pytest-cov>=7.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "mihealth_api"
+module-root = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "network: 需要真实凭据 / 联网的用例（默认跳过，`-m network` 才跑）",
+]

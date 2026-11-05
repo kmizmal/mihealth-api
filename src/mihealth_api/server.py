@@ -21,30 +21,29 @@ Routes
   GET  /api/sport_summary /api/max_watermark /api/watermark/<key>
   GET  /api/latest /api/relatives/<sub> /api/raw/<path> /api/keys
 """
-import json, os, sys, threading, time
+import json, os, threading, time
 from concurrent.futures import ThreadPoolExecutor
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
 from flask import Flask, jsonify, request, send_from_directory
 
-from mihealth_client import (AuthError, MiHealthClient, SCALAR_FIELDS,
-                             client_from_config, load_config)
-from store import Store
+from . import paths
+from .client import (AuthError, MiHealthClient, SCALAR_FIELDS,
+                     client_from_config, load_config)
+from .store import Store
 
 app = Flask(__name__, static_folder=None)
 CFG = load_config()
 client = client_from_config(CFG)
 
 DAY = 86400000
-DB_PATH = CFG.get("db") or os.path.join(HERE, "mihealth.db")
+DB_PATH = CFG.get("db") or paths.db_path()
 _store = None
 try:
     if os.path.exists(DB_PATH):
         _store = Store(DB_PATH)
         print(f"[store] using {DB_PATH}", flush=True)
     else:
-        print("[store] no db yet — run `python sync.py backfill` for cached mode; "
+        print("[store] no db yet — run `mihealth-sync backfill` for cached mode; "
               "serving live API", flush=True)
 except Exception as e:                                          # pragma: no cover
     print(f"[store] cannot open {DB_PATH}: {e}", flush=True)
@@ -105,12 +104,12 @@ def fetch_series(key, hours):
 
 @app.route("/")
 def index():
-    return send_from_directory(os.path.join(HERE, "static"), "index.html")
+    return send_from_directory(paths.static_dir(), "index.html")
 
 
 @app.route("/vendor/<path:f>")
 def vendor(f):
-    return send_from_directory(os.path.join(HERE, "static"), f)
+    return send_from_directory(paths.static_dir(), f)
 
 
 # ---------- 登录 / 会话管理 ----------
@@ -119,7 +118,7 @@ CFG_PATH = CFG.get("config_path")
 
 def _apply_session(sess):
     """把新会话写回 config 并热更新 client。"""
-    from login import save_session
+    from .login import save_session
     save_session(CFG_PATH, sess)
     client.reload_credentials(sess.get("ssecurity"), sess.get("service_token"),
                               sess.get("cuser_id"))
@@ -128,30 +127,8 @@ def _apply_session(sess):
 
 def _auth_selfheal(cl, why):
     """401 自愈：优先 passToken 免密续期，其次从 adb 设备导入。"""
-    print(f"[auth] {why} -> self-heal", flush=True)
-    from login import LoginError, refresh_session
-    cfg = load_config(CFG_PATH)
-    if cfg.get("pass_token"):
-        try:
-            sess = refresh_session(cfg, CFG_PATH)
-            cl.reload_credentials(sess["ssecurity"], sess["service_token"], sess["cuser_id"])
-            _cache.clear()
-            print("[auth] refreshed via passToken", flush=True)
-            return True
-        except LoginError as e:
-            print(f"[auth] passToken refresh failed: {e}", flush=True)
-    try:
-        sys.path.insert(0, os.path.join(HERE, "tools"))
-        import refresh_credentials as rc
-        creds = rc.fetch_from_device()
-        rc.write_config(creds, CFG_PATH)
-        cl.reload_credentials(creds["ssecurity"], creds["service_token"], creds["cuser_id"])
-        _cache.clear()
-        print("[auth] refreshed from device", flush=True)
-        return True
-    except Exception as e:
-        print(f"[auth] device import failed: {e}", flush=True)
-        return False
+    from .auth import make_refresh
+    return make_refresh(CFG_PATH, on_success=_cache.clear)(cl, why)
 
 
 client.on_auth_error = _auth_selfheal
@@ -275,11 +252,10 @@ def api_login_captcha():
 @app.route("/api/login/import_device", methods=["POST"])
 def api_login_import_device():
     """从 adb 设备（已登录的 App）导入会话，含 passToken —— 之后即可免密续期。"""
+    from . import credentials
     try:
-        sys.path.insert(0, os.path.join(HERE, "tools"))
-        import refresh_credentials as rc
-        creds = rc.fetch_from_device(serial=request.args.get("serial") or None)
-        rc.write_config(creds, CFG_PATH)
+        creds = credentials.fetch_from_device(serial=request.args.get("serial") or None)
+        credentials.write_config(creds, CFG_PATH)
     except Exception as e:
         return jsonify({"ok": False, "err": str(e)}), 400
     client.reload_credentials(creds["ssecurity"], creds["service_token"], creds["cuser_id"])
@@ -331,9 +307,7 @@ def api_sync_run():
     def job():
         _sync_job.update(running=True, started=ms_now(), result=None)
         try:
-            import importlib
-            import sync as sync_mod
-            importlib.reload(sync_mod)
+            from . import sync as sync_mod
             S = sync_mod.Syncer(DB_PATH, workers=2, min_interval=0.5,
                                 refresh=sync_mod.make_refresh(CFG_PATH))
             n = S.incremental(hours=72)
@@ -653,17 +627,20 @@ def api_diet():
     return jsonify({"ok": True, "items": res["diet_records"], "source": "live"})
 
 
+# 水位流透传族（比 sync.WM_FAMILIES 宽：这里只转发，不落库）
+WM_ROUTE_FAMILIES = {
+    "fitness": ("data/get_fitness_data_by_watermark", "data_list", 0),
+    "sport":   ("data/get_sport_records_by_watermark", "sport_records", 1),
+    "medical": ("data/get_medical_data_by_watermark", "data_list", 5),
+    "project": ("data/get_project_data_by_watermark", "data_list", 4),
+}
+
+
 @app.route("/api/watermark_feed/<family>")
 def api_watermark_feed(family):
     """通用水位流：?wm=<游标>，walk 到最新。
     family: fitness | sport | medical | project"""
-    import sync as _sync
-    spec = {
-        "fitness": ("data/get_fitness_data_by_watermark", "data_list", 0),
-        "sport": ("data/get_sport_records_by_watermark", "sport_records", 1),
-        "medical": ("data/get_medical_data_by_watermark", "data_list", 5),
-        "project": ("data/get_project_data_by_watermark", "data_list", 4),
-    }.get(family)
+    spec = WM_ROUTE_FAMILIES.get(family)
     if not spec:
         return jsonify({"ok": False, "err": "unknown family"}), 400
     sub, field, wtype = spec
@@ -881,6 +858,17 @@ def api_raw(sub):
     return jsonify(client.call(sub, params, decrypt=False))
 
 
+def main(argv=None):
+    """`mihealth-api` / `python -m mihealth_api.server`: start the local gateway."""
+    import argparse
+    ap = argparse.ArgumentParser(description="Mi Health 本地网关")
+    ap.add_argument("--host", default=os.environ.get("MIH_HOST", "127.0.0.1"))
+    ap.add_argument("--port", type=int, default=int(os.environ.get("MIH_PORT", "8567")))
+    ap.add_argument("--debug", action="store_true")
+    a = ap.parse_args(argv)
+    print(f"[gateway] http://{a.host}:{a.port}  db={DB_PATH if _store else '(live)'}", flush=True)
+    app.run(host=a.host, port=a.port, debug=a.debug)
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("MIH_PORT", "8567"))
-    app.run(host="127.0.0.1", port=port, debug=False)
+    main()

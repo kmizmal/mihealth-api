@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """Mi Health sync orchestrator — backfill / incremental / status / export.
 
-  python sync.py backfill [--keys steps,sleep] [--workers 3]   # full history -> SQLite
-  python sync.py incremental [--hours 72]                      # watermark feed + window top-up
-  python sync.py status                                        # cursors + row counts
-  python sync.py export --family fitness --key steps --csv out.csv
+  mihealth-sync backfill [--keys steps,sleep] [--workers 3]   # full history -> SQLite
+  mihealth-sync incremental [--hours 72]                      # watermark feed + window top-up
+  mihealth-sync status                                        # cursors + row counts
+  mihealth-sync export --family fitness --key steps --csv out.csv
 
-First run:  sync.py backfill        (time-paged full history, all keys)
-After that: sync.py incremental     (cron/任务计划, a handful of requests)
+First run:  mihealth-sync backfill     (time-paged full history, all keys)
+After that: mihealth-sync incremental  (cron/任务计划, a handful of requests)
 
 Incremental strategy
 --------------------
@@ -17,14 +17,13 @@ Incremental strategy
 2. time-window top-up for the last --hours per key — catches records the feed
    may not surface (and repairs any gap after long downtime).
 """
-import argparse, json, os, sys, threading, time
+import argparse, os, threading, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-from mihealth_client import (ApiError, AuthError, MiHealthClient, SCALAR_FIELDS,
-                             client_from_config, load_config)
-from store import Store
+from . import paths
+from .client import (ApiError, AuthError, MiHealthClient, SCALAR_FIELDS,
+                     client_from_config, load_config)
+from .store import Store
 
 FITNESS_KEYS = ["steps", "calories", "sleep", "heart_rate", "stress", "spo2",
                 "intensity", "valid_stand", "energy", "goal", "pai",
@@ -81,7 +80,7 @@ class Syncer:
             return fn(*a, **kw)
         except AuthError as e:
             log("AUTH FAILED:", e)
-            log("  -> tools/refresh_credentials.py (or update config.json) and retry")
+            log("  -> run `mihealth-login --refresh` (or update config.json) and retry")
             raise SystemExit(2)
 
     # ------------------------------------------------------------ backfill
@@ -335,32 +334,17 @@ class Syncer:
         print(f"  TOTAL {tot}")
 
 
-def make_refresh(config_path=None):
-    """Returns a refresh callable that re-reads credentials from the device."""
-    def try_refresh(client):
-        try:
-            sys.path.insert(0, os.path.join(HERE, "tools"))
-            import importlib
-            import refresh_credentials as rc
-            importlib.reload(rc)
-            creds = rc.fetch_from_device()
-            if not creds:
-                return False
-            rc.write_config(creds, config_path)
-            client.reload_credentials(creds["ssecurity"], creds["service_token"],
-                                      creds["cuser_id"])
-            return True
-        except Exception as e:
-            log("  refresh failed:", e)
-            return False
-    return try_refresh
+def make_refresh(config_path=None, use_device=True):
+    """Returns a refresh callable: passToken first, adb as the fallback."""
+    from .auth import make_refresh as _mk
+    return _mk(config_path, use_device=use_device)
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description="Mi Health data sync")
     ap.add_argument("command", choices=["backfill", "incremental", "status", "export"],
                     nargs="?", default="incremental")
-    ap.add_argument("--db", default=os.path.join(HERE, "mihealth.db"))
+    ap.add_argument("--db", default=paths.db_path())
     ap.add_argument("--config", help="凭据文件路径（默认 ./config.json）")
     ap.add_argument("--keys", help="逗号分隔的数据键（默认全部）")
     ap.add_argument("--days", type=int, default=0, help="backfill 窗口天数（0=全历史）")
@@ -373,7 +357,7 @@ def main():
     ap.add_argument("--key")
     ap.add_argument("--csv")
     ap.add_argument("--start"); ap.add_argument("--end")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     cfg = load_config(a.config)
     refresh = None if a.no_auto_refresh else make_refresh(a.config)

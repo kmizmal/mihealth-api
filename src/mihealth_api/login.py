@@ -392,16 +392,18 @@ def refresh_session(cfg, cfg_path=None, proxies=None):
     return s
 
 
-if __name__ == "__main__":
+def main(argv=None):
+    """`mihealth-login`: 密码登录 / passToken 免密续期 / 2FA。"""
     import argparse
+    from . import paths
     ap = argparse.ArgumentParser(description="小米账号登录 → 米健康 serviceToken")
-    ap.add_argument("--config", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json"))
+    ap.add_argument("--config", default=paths.config_path())
     ap.add_argument("--refresh", action="store_true", help="用已存的 pass_token 免密续期")
     ap.add_argument("--user", help="小米账号（手机号/邮箱/ID）")
     ap.add_argument("--password", help="密码（仅当次使用，不落盘）")
     ap.add_argument("--captcha", help="验证码（若上一步要求）")
     ap.add_argument("--sid", default=SID_HEALTH)
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     cfg = {}
     if os.path.exists(a.config):
         cfg = json.load(open(a.config, encoding="utf-8"))
@@ -416,6 +418,12 @@ if __name__ == "__main__":
             print("  pass_token:", (s.get("pass_token") or "")[:16], "...（之后可免密续期）")
             print("  serviceToken:", (s.get("service_token") or "")[:16], "...")
         else:
-            print("用法: python login.py --refresh  或  python login.py --user <账号> --password <密码>")
+            print("用法: mihealth-login --refresh  或  mihealth-login --user <账号> --password <密码>")
+        return 0
     except LoginError as e:
         print("失败:", e, "| code:", e.code, "| 验证码:", e.captcha_url)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,15 @@
+# 统一行尾：仓库与工作区都用 LF。
+# 没有这一条时，Windows 上 core.autocrlf=true 会让工作区变 CRLF，改一行显示整文件重写。
+* text=auto eol=lf
+
+# 明确二进制，防止被当文本处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.db binary
+*.woff2 binary
+
+# 第三方压缩产物：本身就是单行巨文件，不做行尾转换也不参与 diff
+src/mihealth_api/static/chart.umd.min.js -text -diff
