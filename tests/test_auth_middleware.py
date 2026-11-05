@@ -75,25 +75,42 @@ def test_bearer_is_case_insensitive(app):
 
 
 def test_index_is_exempt_and_injects_token(app):
-    """看板本身不需要 token，但它得拿到 token 才能调 /api/*。"""
+    """看板本身不需要 token，但它得拿到 token 才能调 /api/*。
+
+    看板是 `<img src>` + `fetch` 混着用的，`<img>` 发不出自定义头，
+    所以只能在 HTML 里注入 `window.__MIH_TOKEN__`，由页面自己带上。
+    """
     with TestClient(app.app) as c:
         r = c.get("/")
     assert r.status_code == 200
-    assert TOKEN not in r.text          # 占位符没被替换时不该硬塞
+    assert f'window.__MIH_TOKEN__="{TOKEN}"' in r.text
 
 
-def test_index_injects_token_when_placeholder_present(app, monkeypatch):
-    from fastapi.responses import HTMLResponse
+def test_index_html_keeps_the_token_placeholder(app):
+    """静态文件里必须留占位符 —— 删了它看板就静默退化成全 401。"""
+    from pathlib import Path
 
-    real = app.index
+    from mihealth_api import paths
 
-    def fake_index():
-        return HTMLResponse("<!--MIH_TOKEN--><body>hi</body>")
-
-    monkeypatch.setattr(app, "index", fake_index)
-    # 直接调函数本体，绕开路由注册（路由仍指向原始函数）
-    html = fake_index().body.decode()
+    html = Path(paths.static_dir(), "index.html").read_text(encoding="utf-8")
     assert "<!--MIH_TOKEN-->" in html
+    # 三处取数都要带 token，漏一处就有一条数据拿不到
+    assert "const AUTH=TK?" in html
+    assert "fetch(p,{headers:AUTH})" in html
+    assert "headers:{...AUTH," in html
+
+
+def test_index_does_not_inject_when_auth_off(app):
+    app._AUTH_OFF = True
+    with TestClient(app.app) as c:
+        r = c.get("/")
+    assert r.status_code == 200 and "<!--MIH_TOKEN-->" in r.text
+
+
+def test_favicon_is_exempt(app):
+    """浏览器无条件请求 favicon；401 只会在日志里刷一行噪音。"""
+    with TestClient(app.app) as c:
+        assert c.get("/favicon.ico").status_code == 204
 
 
 def test_docs_and_openapi_are_exempt(app):

@@ -447,7 +447,8 @@ base64 是纯文本、对行规则免疫；若目标环境无 base64，可 `su -
 | 热重载 | `--reload`（替代旧 `--debug`；只对 `uvicorn.run("mihealth_api.server:app")` 生效） |
 | 鉴权 | `/api/*` 与 `/mcp` 都要 token：`X-Api-Token: <t>` 或 `Authorization: Bearer <t>`；失败 `401 {"ok":false,"err":"unauthorized"}` |
 | token 来源 | `MIH_API_TOKEN` > `config.json` 的 `api_token` > 首次自动生成并写回 config（0600）；`MIH_API_TOKEN=off` 关闭鉴权 |
-| 免 token | `/`、`/vendor/*`、`/api/login/captcha`（`<img>` 发不出请求头）、`/docs`、`/redoc`、`/openapi.json` |
+| 免 token | `/`、`/favicon.ico`（204）、`/vendor/*`、`/api/login/captcha`（`<img>` 发不出请求头）、`/docs`、`/redoc`、`/openapi.json` |
+| 看板怎么拿到 token | `/` 返回的 HTML 里注入了 `window.__MIH_TOKEN__`（静态文件里是 `<!--MIH_TOKEN-->` 占位符），`api()` / 同步按钮 / 登录面板三处取数自动带 `X-Api-Token`；**`<img src>` 仍走免鉴权的 `/api/login/captcha`** |
 | 参数校验 | 非整数的时间/条数参数返回 `422 {"ok":false,"err":"limit 不是整数: 'abc'"}`；**空串仍按缺省处理**（`?start=&end=` 不会 422） |
 | 错误体 | 与旧版一致：`{"ok":false,"err":"..."}`，不套 FastAPI 的 `{"detail": ...}` |
 

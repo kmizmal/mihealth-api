@@ -158,7 +158,7 @@ def call_paged(sub, mk_params, list_field, max_pages=100):
 
 _TOKEN: str | None = None
 _AUTH_OFF = False
-EXEMPT_EXACT = ("/", "/docs", "/redoc", "/openapi.json", "/api/login/captcha")
+EXEMPT_EXACT = ("/", "/favicon.ico", "/docs", "/redoc", "/openapi.json", "/api/login/captcha")
 EXEMPT_PREFIX = ("/vendor/",)
 
 
@@ -284,6 +284,12 @@ def index():
         snippet = f'<script>window.__MIH_TOKEN__={json.dumps(_TOKEN)}</script>'
         html = html.replace("<!--MIH_TOKEN-->", snippet, 1)
     return HTMLResponse(html)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    # 浏览器会无条件请求它；不回 401（那会在日志里刷一行无意义的鉴权失败）
+    return Response(status_code=204)
 
 
 @app.get("/vendor/{f:path}", include_in_schema=False)

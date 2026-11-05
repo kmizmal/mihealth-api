@@ -4,6 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>小米运动健康 · 数据看板</title>
+<!--MIH_TOKEN-->
 <script src="/vendor/chart.umd.min.js"></script>
 <style>
 :root{
@@ -276,7 +277,9 @@ function grad(id,hex,fade='1f'){ // 垂直渐变填充
 }
 
 /* ---------- 数据 ---------- */
-const api=(p)=>fetch(p).then(r=>r.json());
+const TK=window.__MIH_TOKEN__||'';
+const AUTH=TK?{'X-Api-Token':TK}:{};
+const api=(p)=>fetch(p,{headers:AUTH}).then(r=>r.json());
 async function series(key,hours){return api(`/api/series/${key}?hours=${hours}`);}
 
 function bucket(items,field,hours){
@@ -506,7 +509,7 @@ $('reload')&&($('reload').onclick=loadAll);
 $('btnSync').onclick=async()=>{
   const b=$('btnSync');b.disabled=true;b.textContent='同步中…';
   try{
-    await fetch('/api/sync',{method:'POST'});
+    await fetch('/api/sync',{method:'POST',headers:AUTH});
     for(let i=0;i<200;i++){
       await new Promise(r=>setTimeout(r,3000));
       const s=await api('/api/sync/status');
@@ -534,7 +537,7 @@ const LM={
   async call(url,body,btn){
     if(btn)btn.disabled=true;LM.msg('处理中…');
     try{
-      const d=await (await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      const d=await (await fetch(url,{method:'POST',headers:{...AUTH,'Content-Type':'application/json'},
         body:body?JSON.stringify(body):null})).json();
       if(d.ok){
         LM.msg('成功：'+(d.mode||'')+(d.pass_token_saved?' · 已保存 passToken（可免密续期）':''));

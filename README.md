@@ -219,6 +219,12 @@ GET  /                        数据看板（含同步按钮与登录面板）
 响应统一 `{ok, items, count, has_more}`；`/api/*` 需要 token（`X-Api-Token` 或
 `Authorization: Bearer`，见 API.md §7），交互式文档在 `/docs`。
 
+> **浏览器直接打开 `http://127.0.0.1:8567/` 就能用**：看板本身不需要带 token，
+> 服务端渲染 `/` 时会把本进程的 token 注入成 `window.__MIH_TOKEN__`，
+> 页面里三处取数（`api()` / 同步按钮 / 登录面板）自动带上。
+> 但 `/` 是唯一免鉴权的接口页 —— 手敲 `/api/health` 之类的 URL 仍会 401，
+> 得带 header 或用 `/docs` 试。
+
 ### MCP（让 AI 客户端直接查库）
 
 ```bash
