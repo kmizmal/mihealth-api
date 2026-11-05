@@ -214,3 +214,24 @@ def test_get_sync_job_is_singleton(clean):
     assert a is b
     c = runtime.get_sync_job(str(clean / "other.db"), str(clean / "config.json"))
     assert c is not a
+
+
+def test_sync_job_key_normalises_none_db(clean, monkeypatch):
+    """`config.json` 的 db 常是 null：HTTP 侧会补默认路径，MCP 侧直接传 None。
+
+    不归一化就会为同一个部署造出两个 SyncJob（两把锁 = 没有锁），
+    而且 MCP 那个还会拿 None 去开 Store，直接 TypeError。
+    """
+    monkeypatch.setenv("MIH_DB", str(clean / "mihealth.db"))
+    a = runtime.get_sync_job(None, str(clean / "config.json"))
+    b = runtime.get_sync_job(str(clean / "mihealth.db"), str(clean / "config.json"))
+    assert a is b
+    assert a.db_path == str(clean / "mihealth.db")
+    assert len(runtime._jobs) == 1
+
+
+def test_sync_job_key_normalises_none_config(clean, monkeypatch):
+    monkeypatch.setenv("MIH_CONFIG", str(clean / "config.json"))
+    a = runtime.get_sync_job(str(clean / "mihealth.db"), None)
+    b = runtime.get_sync_job(str(clean / "mihealth.db"), str(clean / "config.json"))
+    assert a is b and a.config_path == str(clean / "config.json")

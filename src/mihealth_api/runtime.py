@@ -209,15 +209,28 @@ class SyncJob:
         reset_store()
 
 
+def job_key(db_path=None, config_path=None):
+    """把 (库, 配置) 归一化成缓存键。
+
+    关键是 `db_path`：`config.json` 里 `db` 常常是 `null`（`config.example.json`
+    就写着 `"db": null`），调用方有的传 `cfg.get("db")`（None）、有的传
+    `cfg.get("db") or paths.db_path()`（真实路径）。不归一化就会为同一个部署
+    造出两个 SyncJob —— 两把锁等于没有锁，而且 MCP 那边还会拿 None 去
+    `Store(None)`，直接 `TypeError: expected str, bytes or os.PathLike object`。
+    """
+    db = db_path or paths.db_path()
+    return (db, config_path or paths.config_path())
+
+
 def get_sync_job(db_path=None, config_path=None):
-    """进程级 SyncJob 单例（按 (库, 配置) 缓存）。
+    """进程级 SyncJob 单例（按 `job_key()` 归一化后缓存）。
 
     HTTP 与 MCP 必须拿到同一个实例，否则各持一把锁 = 没有锁。
     """
-    key = (db_path, config_path)
+    db, cfg = job_key(db_path, config_path)
     with _lock:
-        job = _jobs.get(key)
+        job = _jobs.get((db, cfg))
         if job is None:
-            job = SyncJob(db_path, config_path)
-            _jobs[key] = job
+            job = SyncJob(db, cfg)
+            _jobs[(db, cfg)] = job
         return job

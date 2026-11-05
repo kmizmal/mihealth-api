@@ -506,20 +506,36 @@ async function loadAll(){
 $('range').onchange=loadAll;
 $('sportType').onchange=loadAll;
 $('reload')&&($('reload').onclick=loadAll);
+/* 同步：点一次就够，之后按 running 自己接上（刷新页面也能接上） */
+let syncTimer=null;
+function syncUI(running,msg){
+  const b=$('btnSync');
+  b.disabled=!!running; b.textContent=running?'同步中…':'同步';
+  if(msg)$('txtUpd').textContent=msg;
+}
+const SYNC_MAX_WAIT=30*60*1000;   // 兜底：卡住超过 30 分钟就不再空转（后端正常时不会触发）
+async function pollSync(){
+  syncTimer=null;
+  let s;
+  try{ s=await api('/api/sync/status'); }
+  catch(e){ syncUI(false,'同步状态读取失败'); return; }
+  if(s.running){
+    const waited=s.started?Date.now()-s.started:0;
+    if(waited>SYNC_MAX_WAIT){ syncUI(false,'同步似乎卡住了（已等 '+Math.round(waited/60000)+' 分钟），刷新看看'); return; }
+    syncUI(true); syncTimer=setTimeout(pollSync,3000); return;
+  }
+  syncUI(false, (s.result&&s.result.ok)
+      ? `同步完成 · 写入 ${num(s.result.rows)} 行`
+      : '同步失败：'+((s.result||{}).err||'未知'));
+  if(s.result)await loadAll();
+}
 $('btnSync').onclick=async()=>{
-  const b=$('btnSync');b.disabled=true;b.textContent='同步中…';
+  const b=$('btnSync'); b.disabled=true; b.textContent='同步中…';
   try{
-    await fetch('/api/sync',{method:'POST',headers:AUTH});
-    for(let i=0;i<200;i++){
-      await new Promise(r=>setTimeout(r,3000));
-      const s=await api('/api/sync/status');
-      if(!s.running){
-        $('txtUpd').textContent=(s.result&&s.result.ok)?`同步完成 · 写入 ${num(s.result.rows)} 行`:'同步失败：'+((s.result||{}).err||'未知');
-        await loadAll();break;
-      }
-    }
-  }catch(e){$('txtUpd').textContent='同步出错';}
-  b.textContent='同步';b.disabled=false;
+    const r=await fetch('/api/sync',{method:'POST',headers:AUTH});
+    if(r.status===409){ $('txtUpd').textContent='已有同步在跑，继续等它'; }
+  }catch(e){ $('txtUpd').textContent='同步启动失败'; }
+  pollSync();          // 不管 202/409，都从「查状态」这一步接上
 };
 
 /* ---------- 登录 ---------- */
@@ -566,6 +582,7 @@ $('rings').innerHTML=[1,2,3,4].map(()=>`<div class="ring"><div class="skl" style
   <div class="skl" style="height:20px;width:80%;margin-top:8px"></div></div></div>`).join('');
 loadSportTypes();loadAll();
 setInterval(loadAll,300000);
+pollSync();          // 页面一打开就接上正在跑的同步（刷页/重开都不丢进度）
 </script>
 </body>
 </html>

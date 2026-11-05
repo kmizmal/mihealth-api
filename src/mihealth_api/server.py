@@ -331,7 +331,8 @@ def api_health():
 
 def _job():
     cfg = runtime.get_config()
-    return runtime.get_sync_job(cfg.get("db") or paths.db_path(), CFG_PATH)
+    # 交给 runtime.job_key 归一化，别在这里各算一套（否则和 MCP 侧拆成两个实例）
+    return runtime.get_sync_job(cfg.get("db"), cfg.get("config_path") or CFG_PATH)
 
 
 @app.get("/api/sync/status")
