@@ -8,6 +8,7 @@
 """
 import importlib
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -179,7 +180,9 @@ def test_token_generated_and_persisted(tmp_path, monkeypatch):
     tok = SV.init_token()
     assert tok and len(tok) > 20
     assert json.loads(cfg.read_text(encoding="utf-8"))["api_token"] == tok
-    assert oct(cfg.stat().st_mode)[-3:] == "600"
+    if os.name == "posix":
+        # Windows 没有 posix 权限位，chmod 基本是空操作 —— 只在 POSIX 上断言
+        assert oct(cfg.stat().st_mode)[-3:] == "600"
     # 再来一次拿到同一个（从 config 读）
     SV2 = importlib.reload(SV)
     runtime.reload_config()
