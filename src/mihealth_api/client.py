@@ -282,11 +282,17 @@ class MiHealthClient:
         """
         retries = self.max_retries if retries is None else retries
         pre = self.PREFIX if prefix is None else prefix   # "" / "healthapp/" for other services
+        # Normalise: callers pass "healthapp/" or "healthapp", and a bare
+        # concatenation would yield "https://hosthealthapp/..." (no separator).
+        if pre and not pre.startswith("/"):
+            pre = "/" + pre
+        if pre and not pre.endswith("/"):
+            pre += "/"
         refreshed = False
         while True:
             nonce = gen_nonce(self.time_diff)
             q = signed_encrypted(method, pre + subpath, params, nonce, self.security)
-            url = self.base + pre + subpath
+            url = self.base + (pre or "/") + subpath
             r = self._send(method, url, q, retries)
 
             auth_problem = r.status_code in (401, 403)

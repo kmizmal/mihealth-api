@@ -133,7 +133,10 @@ def exchange_pass_token(pass_token, cuser_id, user_id, sid=SID_HEALTH, proxies=N
              params={"sid": sid, "_json": "true"}, cookies=ck)
     j = _json_body(r.text)
     if j.get("code") != 0 or not j.get("location"):
-        raise LoginError(f"passToken 无效或已过期（code={j.get('code')} {j.get('desc')}）", raw=j)
+        # code 必须带出去：70016 既可能是票真过期，也可能是 ck 里 userId 传了空串，
+        # 上层要靠它区分「该续期」还是「该补 userId」。
+        raise LoginError(f"passToken 无效或已过期（code={j.get('code')} {j.get('desc')}）",
+                         code=j.get("code"), raw=j)
 
     r2 = _req(S, "get", j["location"], cookies=ck, allow_redirects=False)
     token = (S.cookies.get("serviceToken", domain="sts-hlth.io.mi.com")
@@ -143,8 +146,12 @@ def exchange_pass_token(pass_token, cuser_id, user_id, sid=SID_HEALTH, proxies=N
         token = m.group(1) if m else None
     if not token:
         raise LoginError("STS 回调未返回 serviceToken", raw={"status": r2.status_code})
+    # userId 统一成字符串：服务端有时回数字，config.json 里存的是字符串，
+    # 不归一化会让后续比较/写入出现 42 vs "42" 的坑。
+    uid = j.get("userId") or user_id
     return {"ssecurity": j.get("ssecurity"), "service_token": token,
-            "cuser_id": j.get("cUserId") or cuser_id, "user_id": j.get("userId") or user_id,
+            "cuser_id": j.get("cUserId") or cuser_id,
+            "user_id": None if uid in (None, "") else str(uid),
             "sid": sid, "ts": int(time.time())}
 
 
@@ -356,13 +363,19 @@ def _device_id():
 # ---------------------------------------------------------------- config 落盘
 
 def save_session(cfg_path, session, keep=None):
-    """把会话写入 config.json（不含密码）。keep 里的原字段保留。"""
+    """把会话写入 config.json（不含密码）。
+
+    原有字段一律保留（先读旧文件再覆盖会话字段）。`keep` 是例外清单：里面列出的
+    字段名**保留旧值**、不被本次会话覆盖——用于「这次登录拿到的 sid/region 不想要」
+    这类场合，缺省（None）表示全按会话值写。
+    """
     cfg = {}
     if cfg_path and os.path.exists(cfg_path):
         try:
             cfg = json.load(open(cfg_path, encoding="utf-8"))
         except Exception:
             cfg = {}
+    pinned = {k: cfg[k] for k in (keep or ()) if k in cfg}
     cfg["ssecurity"] = session.get("ssecurity") or cfg.get("ssecurity")
     cfg["service_token"] = session.get("service_token") or cfg.get("service_token")
     cfg["cuser_id"] = session.get("cuser_id") or cfg.get("cuser_id")
@@ -372,6 +385,7 @@ def save_session(cfg_path, session, keep=None):
         cfg["pass_token"] = session["pass_token"]
     cfg["session_at"] = session.get("ts") or int(time.time())
     cfg["sid"] = session.get("sid", SID_HEALTH)
+    cfg.update(pinned)                       # keep 白名单最后落地，旧值优先
     with open(cfg_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
     try:

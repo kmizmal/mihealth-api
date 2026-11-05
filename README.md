@@ -241,6 +241,18 @@ uv.lock              # 锁定版本，复现用 uv sync --frozen
 .python-version      # 3.15
 ```
 
+## 测试
+
+```bash
+uv run pytest                       # 全量（纯离线，不碰云端）
+uv run pytest --cov=mihealth_api    # 带覆盖率（当前 96%）
+uv run pytest -m network            # 只跑标了 network 的用例（默认跳过）
+```
+
+`tests/` 全部用假客户端 + Flask `test_client`，不读真实 `config.json`、不发请求。
+`conftest.py` 提供 `store` / `config.json` / 合成 Cookies 库三个 fixture；
+`tests/test_server.py` 与 `test_server_live.py` 分别覆盖「有本地库」和「无库走实时」两种模式。
+
 ## 实现说明
 
 - 数据来自小米运动健康账号的云端服务（`hlth.io.mi.com`），凭证为登录态 Cookie

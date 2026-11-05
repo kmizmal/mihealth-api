@@ -135,7 +135,11 @@ class Store:
         n = 0
         rows = []
         for it in items:
-            ts = it.get("time") or it.get("_t")
+            # `time` may legitimately be 0 (epoch); `or` would wrongly fall
+            # through to _t and drop the row, so test for None explicitly.
+            ts = it.get("time")
+            if ts is None:
+                ts = it.get("_t")
             if ts is None:
                 continue
             try:

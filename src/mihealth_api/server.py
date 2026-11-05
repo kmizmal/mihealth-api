@@ -151,7 +151,7 @@ def api_login_refresh():
     cfg = load_config(CFG_PATH)
     if not cfg.get("pass_token"):
         return jsonify({"ok": False, "err": "config 里没有 pass_token：请先账号密码登录或从设备导入"}), 400
-    from login import LoginError, refresh_session
+    from .login import LoginError, refresh_session
     try:
         sess = refresh_session(cfg, CFG_PATH, proxies=cfg.get("proxies"))
     except LoginError as e:
@@ -175,8 +175,8 @@ def api_login_password():
     username, password = body.get("username") or _login_state["username"], body.get("password")
     captcha, code2fa = body.get("captcha"), body.get("code")
     proxies = CFG.get("proxies") or None
-    from login import (LoginError, Need2FA, finish_2fa, login_with_password,
-                       new_login_session, start_2fa)
+    from .login import (LoginError, Need2FA, finish_2fa, login_with_password,
+                        new_login_session, start_2fa)
 
     # 第二段：带 2FA 验证码，直接走完换取 serviceToken
     if code2fa and _login_state.get("2fa_context"):
