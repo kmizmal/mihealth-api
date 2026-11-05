@@ -227,7 +227,8 @@ async def lifespan(app):
         print("[auth] token 鉴权已关闭（MIH_API_TOKEN=off）", flush=True)
     elif tok:
         print(f"[auth] token 已启用（前 6 位 {tok[:6]}…）；请求带 X-Api-Token 或 Authorization: Bearer", flush=True)
-    print(f"[gateway] db={runtime.get_config().get('db') if runtime.get_store() else '(live)'}", flush=True)
+    _st = runtime.get_store()
+    print(f"[gateway] db={_st.path if _st is not None else '(live)'}", flush=True)
     if MCP_APP is not None:
         # app.mount() 不会跑子应用的 lifespan，会话管理器必须由宿主驱动
         from .mcp_server import mcp as _mcp
@@ -301,7 +302,7 @@ def api_health():
     store = runtime.get_store()
     client = runtime.get_client()
     st = {"ok": True, "mode": "db" if store else "live",
-          "db": runtime.get_config().get("db") if store else None,
+          "db": store.path if store is not None else None,
           "host": client.base, "cuser_id": client.cuser,
           "token_prefix": (client.service_token or "")[:16] + "...",
           "sseccurity_set": bool(client.security)}
