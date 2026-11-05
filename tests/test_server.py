@@ -183,7 +183,8 @@ def test_health_reports_db_mode(srv):
     assert body["ok"] is True and body["mode"] == "db"
     assert body["auth"] == "ok"
     assert body["token_prefix"].endswith("...")
-    assert body["sseccurity_set"] is True
+    assert body["ssecurity_set"] is True
+    assert "sseccurity_set" not in body      # 2026-09-29 起多出的一个 c，已修
     assert body["rows"] > 0 and "cursors" in body
 
 

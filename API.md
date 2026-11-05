@@ -457,7 +457,7 @@ MCP 端点（Streamable HTTP，可选依赖）见 [MCP.md](MCP.md)：`POST /mcp/
 
 | 路由 | 说明 |
 |---|---|
-| `GET /api/health` | 认证状态 + 存储模式 + 行数 |
+| `GET /api/health` | 认证状态 + 存储模式 + 行数；字段：`ok` `mode` `db` `host` `cuser_id` `token_prefix` `ssecurity_set` `auth` `rows` `cursors`（`auth` 为 `ok`/`expired`/`error`） |
 | `POST /api/sync` · `GET /api/sync/status` | 触发增量同步 / 查询进度（看板"同步"按钮用它） |
 | `GET /api/families` | **数据清单**：各 family/key 行数与时间范围 + 数据源（手表/手机/App 线） |
 | `GET /api/db/<family>` | **通用多维查询**：`?key=&start=&end=&sid=&dedup=0/1&order=&limit=&fields=meta` |

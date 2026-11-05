@@ -305,7 +305,7 @@ def api_health():
           "db": store.path if store is not None else None,
           "host": client.base, "cuser_id": client.cuser,
           "token_prefix": (client.service_token or "")[:16] + "...",
-          "sseccurity_set": bool(client.security)}
+          "ssecurity_set": bool(client.security)}
     if store:
         st["rows"] = store.count()
         st["cursors"] = store.states()
