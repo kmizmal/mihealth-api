@@ -2,9 +2,9 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | 1.0 |
+| 文档版本 | 1.1 |
 | 目标客户端 | 小米运动健康 `com.mi.health` v3.59.0 (versionCode 359000) |
-| 验证环境 | Android 模拟器实机登录验证 + Python 客户端实测打通 |
+| 验证环境 | Android 模拟器实机登录验证 + Python 客户端实测打通（`uv sync` 复现） |
 | 性质 | 客户端接口（非官方开放 API）。凭证=登录态 Cookie，仅供**本人数据**使用 |
 | Base URL | `https://hlth.io.mi.com/app/v1/` |
 | 传输 | HTTPS + OkHttp；请求/响应参数级加密（RC4），认证 Cookie |
@@ -15,11 +15,13 @@
 
 ### 1.1 请求凭据（三件套）
 
-| 凭据 | 取值 | 来源 |
+| 凭据 | 取值 | 来源（WebView Cookie 库的 `cookies` 表） |
 |---|---|---|
-| `ssecurity` | `<ssecurity>`（每次登录会话都会变） | WebView Cookie 库 `.wear.mi.com.internal.yrn.net` 行 `ssecurity` |
-| `serviceToken` | `<serviceToken>`（长串 base64） | Cookie 库 `sts-hlth.io.mi.com` 行 `serviceToken` |
-| `cUserId` | `<cUserId>` | 同上 `cUserId`；另有明文 `userId=<userId>` |
+| `ssecurity` | `<ssecurity>`（每次登录会话都会变） | `.wear.mi.com.internal.yrn.net` 行 |
+| `serviceToken` | `<serviceToken>`（长串 base64） | `sts-hlth.io.mi.com` 行 `serviceToken` |
+| `cUserId` | `<cUserId>` | 同上 `cUserId` |
+| `userId` | `<userId>`（明文数字） | 同上；**passToken 换票时必须带** |
+| `passToken` | `<passToken>`（`V1:` 开头） | `.account.xiaomi.com` 行，免密续期用 |
 
 提取（root 设备，SQLite）：
 
@@ -28,8 +30,27 @@ adb shell su -c "sqlite3 /data/data/com.mi.health/app_webview/Default/Cookies \
   'select host_key,name,value from cookies'"
 ```
 
+**不需要 root / 不需要 Android**：这个库就是普通 SQLite，把
+`/data/data/com.mi.health/app_webview/Default/Cookies`（连 `-wal`/`-shm`）拷到电脑即可离线读：
+
+```python
+import sqlite3
+con = sqlite3.connect("file:Cookies?mode=ro&immutable=1", uri=True)
+for host, name, value in con.execute(
+        "select host_key, name, value from cookies order by host_key, name"):
+    print(f"{host}\t{name}\t{value[:40]}")
+```
+
+> `value` 为空时真值在 `encrypted_value`：`v10` 是 Chromium 旧版（`PBKDF2("peanuts","saltysalt",1,16)`
+> + IV 全 `0x20` + AES-128-CBC）可离线解；`v20` 绑定 App 与设备，离线解不开。
+> 拿不到明文也不影响使用：只要库里还有 `passToken`，按 §5.1 免密换新票即可。
+
 - 有效 token 在 `sts-hlth.io.mi.com` 行；`.hlth.io.mi.com` 行的 `serviceToken=miothealth` 是 sid 标记，**不是**要发的值
 - `ssecurity` 也可从 `com.xiaomi.passport` 服务令牌流获得（此处用 Cookie 库提取）
+- 🕳 **Cookie 库里的 `serviceToken` 基本一定过期**（快照本身旧），直接请求是 `401 auth failed`；
+  同一份库里有 `passToken` 就能免密换新票（见 §5.1）
+- 🕳 **换票报 `70016 登录验证失败` 先查 `userId` 是否为空**：`passToken / cUserId / userId`
+  缺一即 70016，与「票真的过期」同码，极容易误判
 
 ### 1.2 请求头
 
@@ -41,7 +62,12 @@ Cookie: cUserId=<cUserId>; serviceToken=<长token>; locale=zh_cn
 
 ### 1.3 凭证有效期
 
-`serviceToken` 有服务端过期（实测即时有效）。过期后 app 会刷新；外部客户端需在 app 登录态下重新提取（见 5.1）。401 响应 `{"code":2,"message":"auth err"}`。
+`serviceToken` 由服务端控制失效，**没有可靠的前置有效期**：刚从 Cookie 库抠出来的票
+经常已经过期（只要还在登录态用过就算「旧」）。过期表现为 401
+`{"code":2,"message":"auth err"}` 或客户端 `AuthError: auth failed (HTTP 401)`。
+
+恢复优先级（§5.1）：**`passToken` 免密续期 → adb 重取 → 账号密码登录**。
+`passToken` 有效期约 1~2 个月，期间不需要密码、不需要设备。
 
 ---
 
@@ -328,12 +354,28 @@ if (XMPassportSettings.getPassWordEncryptor() == null)      // 无 EUI 加密器
 
 ## 5. 凭证刷新与维护
 
-### 5.1 token 过期后的恢复（实测流程）
+### 5.1 token 过期后的恢复（实测优先级）
 
-1. 在已登录设备上重新提取 WebView Cookie：
+按代价从低到高，前三步能成就不要往下走：
+
+1. **`passToken` 免密续期**（首选，无密码无设备）：
+
+   ```bash
+   uv run python login.py --refresh
+   ```
+
+   内部是一次 `serviceLogin`（带 `passToken / cUserId / userId` 三个 cookie）→ 读 `location`
+   不跟随 → 从 `Set-Cookie` 取新 `serviceToken`，同时换到新的 `ssecurity`、回写 `passToken`。
+2. **从已登录设备重取 Cookies**（没有 `passToken` 时）：
    `sqlite3 /data/data/com.mi.health/app_webview/Default/Cookies 'select host_key,name,value from cookies'`
-2. 用 `sts-hlth.io.mi.com` 行 `serviceToken`、`cUserId` + `.wear.mi.com.internal.yrn.net` 行 `ssecurity` 更新配置。
-3. 不建议拿 `.hlth.io.mi.com` 行的 `serviceToken`（那是 sid 标记）。
+   取 `sts-hlth.io.mi.com` 行 `serviceToken`/`cUserId`/`userId` + `.wear.mi.com.internal.yrn.net`
+   行 `ssecurity` 更新配置。**`.hlth.io.mi.com` 行的 `serviceToken` 是 sid 标记，不要用。**
+3. **账号密码登录**（`uv run python login.py --user <账号> --password <密码>`，可能触发验证码/2FA）。
+
+自动化：`server.py` / `sync.py` 注册了 `on_auth_error` 钩子，收到 401 时**先免密续期**、
+失败再回落到 adb 导入，成功后**自动重试当次请求**（`[auth] refreshed via passToken`）。
+
+> `ssecurity` 与 `serviceToken` 必须**同批**写入 —— 续期会同时刷新两者，只更新其一必然签名失败。
 
 ### 5.2 adb 自动重取（`tools/refresh_credentials.py`，实测坑）
 
@@ -387,13 +429,15 @@ base64 是纯文本、对行规则免疫；若目标环境无 base64，可 `su -
 | `statistics/get_stat_data_by_time` | 参数已按 bean 对齐仍返回空集，账号无对应功能数据 |
 | `data/get_latest_fitness_data` | 参数待校准（返回 -8）；用 `by_time` 取最新一条即可 |
 | `pv.hlthopen.io.mi.com`（官方开放 API） | 需 OAuth client_id，非个人可用 |
+| GPS 轨迹 | 接口齐备（`running_route/*`），但本账号云端 0 条：运动记录 `route_info` 全为 null |
+| 饮食记录 | 接口齐备（`diet/*`），本账号从未使用，无数据 |
 
 ---
 
 ## 7. 本地网关 API（server.py，推荐项目直接对接）
 
-启动：`python server.py` → `http://127.0.0.1:8567`
-默认**读本地 SQLite**（先跑 `python sync.py backfill`）；无库时自动回退实时接口。
+启动：`uv run python server.py` → `http://127.0.0.1:8567`（端口可用 `MIH_PORT` 覆盖）
+默认**读本地 SQLite**（先跑 `uv run python sync.py backfill`）；无库时自动回退实时接口。
 
 | 路由 | 说明 |
 |---|---|
@@ -427,7 +471,17 @@ base64 是纯文本、对行规则免疫；若目标环境无 base64，可 `su -
 | `GET /api/relatives/<sub>?target=&start=&end=` | 亲友数据 |
 | `GET /api/raw/<path>?data=<json>` | 透传任意 app/v1 端点（返回密文原文） |
 | `GET /api/keys` | 全数据键清单 |
-| `GET /` | 数据看板页面 |
+| `GET /` | 数据看板页面（含"同步"按钮与右上角登录面板） |
+
+登录 / 会话：
+
+| 路由 | 说明 |
+|---|---|
+| `GET /api/login/status` | 是否可免密续期（`can_refresh`）、`session_at`、`user_id`、可用登录方式 |
+| `POST /api/login/refresh` | 用已存 `passToken` 免密换票，回写 `config.json` |
+| `POST /api/login` | 账号密码登录；返回 `need_captcha` / `need_2fa`（含验证码投递通道） |
+| `GET /api/login/captcha` | 取图片验证码（与会话绑定，取图与提交必须同一 session） |
+| `POST /api/login/import_device` | 从 adb 设备导入会话（含 `passToken`），之后即可免密续期 |
 
 响应统一 `{ok,items|count,has_more}`；`has_more=true` 表示还有历史未拉完（加大 `pages` 或改用 watermark）。
 
@@ -452,7 +506,9 @@ base64 是纯文本、对行规则免疫；若目标环境无 base64，可 `su -
 
 ---
 
-## 7. Python 客户端（mihealth_client.py）
+## 8. Python 客户端（mihealth_client.py）
+
+依赖统一由 uv 管理（`uv sync` 建 `.venv`，`uv run` 执行，不手工 pip）：
 
 ```python
 from mihealth_client import MiHealthClient, load_config, client_from_config
@@ -485,12 +541,20 @@ C.get_sport_records_by_time(start_ms, end_ms)
 
 ---
 
-## 8. 数据真实性说明（与官方口径的差异）
+## 9. 数据真实性说明（与官方口径的差异）
 
 - **分钟级心率约 1215/天**：手环正常佩戴下的采样密度（全天佩戴）。
 - **步数/卡路里 value 是分钟增量**，非累计值；聚合请自行累加或乘时段。
 - **`nextKey`（驼峰）在 `data` 参数体内被忽略**（服务端按 `next_key` 解析）：客户端字段名写作 `nextKey`，但实际生效的是 `next_key`；按 `next_key` 传游标，否则每页都返回第一页。
 - **relatives / latest / watermark** 按 phoneId 归属：本机 `device_info.default_id` 提取的 phoneId 对 wm 接口返回空（尚未同步表），属正常——以 `next_key` 翻页路径为准。
+- **睡眠分期**：`sleep` 的分段 `items[].state` 为 `2=深睡`、`3=浅睡`、`4=REM`
+  （用摘要里的 `sleep_deep/light/rem_duration` 反算核对确认）。
+- **睡分期时长单位**：`sleep_deep_duration` 等是**分钟**；`duration` 与 `bedtime→wake` 的差值是**秒**。
+- **`avg_pace`**：部分运动记录为空，用 `duration ÷ distance` 推算（秒/公里）。
+- **时间单位**：记录里的 `time`/`start_time`/`bedtime`/`watermark` 是**秒**；接口入参
+  `startTime`/`endTime` 是**毫秒**（唯一例外是轨迹库的 `start_time`，它是毫秒）。
+- **数据源**：同一分钟可能同时来自多个 `sid`（手表 / 手机 / App 线）。
+  本仓库默认查 `dedup` 表按每分钟最大值收敛，要原始多源请 `dedup=0`（见 §7 的 `/api/db`）。
 
 ---
 

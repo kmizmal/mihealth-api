@@ -12,7 +12,7 @@
 
 为需要访问**本人**小米运动健康数据的场景提供可编程通道：个人数据备份与导出、接入自建项目/仪表板、与第三方工具（Home Assistant、Obsidian、Grafana 等）做数据集成、接口与数据格式研究。
 
-- 仅供访问**使用者自己账号**名下的数据；需先在登录态设备上提取凭据（见下文）
+- 仅供访问**使用者自己账号**名下的数据；需先从自己已登录的 App 提取一次登录凭据（见「登录 / 会话」）
 - 与小米公司无任何关联，不是官方开放 API（官方通道为 `pv.hlthopen.io.mi.com`，需注册 OAuth client_id）
 - 请遵守适用法律与平台条款使用
 
@@ -33,7 +33,7 @@
 | 分钟级数据 | 步数、卡路里、心率、血氧、压力、强度活动、站立、耳机噪声 |
 | 周期数据 | 睡眠（深睡/浅睡/REM 分期）、PAI、VO2 Max、体重、经期 |
 | 医疗/项目 | ECG 等医疗记录、睡眠节律、睡眠日记 |
-| 运动 | 记录（9 种类型）× 79 项跑步指标（跑姿/成绩预测/心率区间/训练负荷）、汇总、类别表 |
+| 运动 | 记录（服务端类别表 5 类：`outdoor_running` `outdoor_walking` `outdoor_hiking` `e_sports` `physical_training`）× 79 项跑步指标（跑姿/成绩预测/心率区间/训练负荷）、汇总、类别表 |
 | 饮食/体重管理 | 饮食记录、食物库、饮食建议、减重计划（接口已通，本账号无数据） |
 | 摘要 | 每日目标达成（步数/热量/活动/站立 达成率） |
 | 多维查询 | 按数据键 / 时间窗 / 数据源 / 运动类型 / 去重开关，服务端聚合与 CSV 导出 |
@@ -46,12 +46,15 @@
 
 ## 快速开始
 
+依赖一律走 uv：`uv sync` 建 `.venv`，`uv run` 执行——**不需要手动 `pip install`、不需要 `activate`**（`uv.lock` 已锁定版本，`uv sync --frozen` 可严格按锁文件装）。
+
 ```bash
 uv sync                                   # 依赖装进 .venv（pycryptodome 提供 RC4 提速 ~40x）
 
 # 放入凭据（提取方法见 API.md §1；有 root 设备也可自动抓取）
 cp config.example.json config.json
-uv run python tools/refresh_credentials.py   # 自动从设备读取并写回 config.json
+uv run python tools/refresh_credentials.py   # 从设备读取并写回（含 passToken）
+# 或者：已有 Cookies 库/备份时 → uv run python login.py --refresh（见「备用：手动提取」）
 
 # 1) 首次全量回填 → SQLite（17 个数据键 + 运动记录 + 每日摘要）
 uv run python sync.py backfill
@@ -73,15 +76,15 @@ uv run python tools/export_all.py         # 全量导出 JSON（不落库）
 
 | 能力 | 说明 |
 |---|---|
-| 全量回填 | 按时间窗 + `next_key` 游标翻页拉全历史，4 线程并发（`--workers`） |
+| 全量回填 | 按时间窗 + `next_key` 游标翻页拉全历史，默认 3 线程并发（`--workers` 可调） |
 | 增量同步 | 走**水位变更流**（fitness / sport 各一条，族内向前推进），游标持久化，逐页落库 |
 | 时间窗补拉 | 增量时同时补拉最近 `--hours`（默认 72h），修复断档 |
 | 去重 | 分页重叠与多数据源（手表/手机）在**物化去重表** `dedup` 收敛为每分钟一条（视图版实测 20~80s/查询，物化后 <0.5s，原始行完整保留在 `records`） |
 | 限流 | `--min-interval` 控制请求间隔（默认 0.4s），避免触发风控 |
 | 断点续传 | 游标每页落库，中断不丢进度；`INSERT OR REPLACE` 保证重跑幂等 |
-| 401 自愈 | 检测到鉴权失败自动调用 `tools/refresh_credentials.py` 重取凭据并**重试当次请求** |
+| 401 自愈 | 鉴权失败时**先 `passToken` 免密续期**，失败再回落到 adb 重取；成功后**重试当次请求** |
 
-数据库表：`records`（原始行，主键 `family+key+sid+ts`）、`v_dedup`（去重视图）、`sync_state`（游标）。
+数据库表：`records`（原始行，主键 `family+key+sid+ts`）、`dedup`（写入时维护的物化去重表，主键 `family+key+ts`）、`v_dedup`（指向 `dedup` 的视图）、`sync_state`（游标）。
 
 ## 登录 / 会话（三种方式）
 
@@ -101,9 +104,9 @@ uv run python tools/export_all.py         # 全量导出 JSON（不落库）
 命令行等价：
 
 ```bash
-python login.py --user <小米账号> --password <密码>   # 首次（密码不留存）
-python login.py --refresh                            # 之后免密续期
-python tools/refresh_credentials.py                  # 从设备导入（含 passToken）
+uv run python login.py --user <小米账号> --password <密码>   # 首次（密码不留存）
+uv run python login.py --refresh                            # 之后免密续期
+uv run python tools/refresh_credentials.py                  # 从设备导入（含 passToken）
 ```
 
 > 落盘内容只有 `ssecurity / service_token / cuser_id / user_id / pass_token / session_at`（`config.json`，权限 600）。
@@ -160,7 +163,7 @@ for host, name, value in con.execute(
 **两个必踩的坑：**
 
 1. **Cookie 库里躺着的 `serviceToken` 基本一定过期了**，直接拿去请求会 `401 auth failed`。
-   这不是提取错了，是快照本来就旧。只要同一份库里还有 `passToken`，`python login.py --refresh`
+   这不是提取错了，是快照本来就旧。只要同一份库里还有 `passToken`，`uv run python login.py --refresh`
    就能换新票，不需要密码、不需要设备。
 2. **换票报 `70016 登录验证失败` 时先查 `userId` 有没有带上。** `passToken` 换票要求 cookie 里
    `passToken / cUserId / userId` 三件齐全，`userId` 是空串时 passport 直接回 70016，
@@ -169,83 +172,34 @@ for host, name, value in con.execute(
 
 `ssecurity` 与 `serviceToken` 必须**同批**写入 —— 续期会同时刷新两者，只更新其中一个必然签名失败。
 
-## HTTP API（本地网关）
+## 接口文档
 
-`server.py` 启动后 `http://127.0.0.1:8567`：
+接口层面的内容全部在 [API.md](API.md)，README 只留入口：
 
-| 路由 | 说明 |
+| API.md | 内容 |
 |---|---|
-| `GET /` | 数据看板（含"同步"按钮） |
-| `GET /api/health` | 认证状态 + 存储模式 + 行数 |
-| `POST /api/sync` · `GET /api/sync/status` | 触发增量同步 / 查询进度 |
-| `GET /api/overview` | 今日摘要 |
-| `GET /api/series/<key>?hours=24` | 指定键时间序列 |
-| `GET /api/fitness/<key>?start=&end=` | 分钟级数据，`start<=0` 拉全量 |
-| `GET /api/daily_goals?days=14` | 每日目标达成 |
-| `GET /api/sport_records?days=` `/api/sport_summary` | 运动记录/汇总 |
-| `GET /api/medical` `/api/project` `/api/stat/<key>` `/api/aggregated` | 医疗/项目/统计/聚合 |
-| `GET /api/watermark/<key>` `/api/max_watermark` | 增量锚点 |
-| `GET /api/watermark_feed/<family>?wm=` | 通用水位流（fitness/sport/medical/project） |
-| `GET /api/latest?keys=` `/api/relatives/<sub>` `/api/raw/<path>` `/api/keys` | 最新/亲友/透传/键表 |
-| `GET /api/families` | 数据清单：family/key 行数、时间范围、数据源 |
-| `GET /api/db/<family>` | **多维查询**：key × 时间窗 × 数据源 × 去重开关 × 排序 × 条数 |
-| `GET /api/agg/<family>/<key>` | **服务端聚合**：内层字段 × sum/max/min/avg × 任意桶宽 |
-| `GET /api/export.csv` | 任意族/键导出 CSV |
-| `GET /api/sport_types` · `/api/sport_records?type=` | 运动类型清单 / 按类型过滤 |
-| `GET /api/sport_detail` · `/api/routes` | 单条运动扩展数据（轨迹引用）/ GPS 轨迹库 |
-| `GET /api/diet?days=` | 饮食记录 |
+| §1–6 | 小米云端 `hlth.io.mi.com/app/v1/` 原生接口：认证四件套、RC4 签名协议、端点目录、账号登录、凭证刷新、附加数据族 |
+| §7 | 本仓库 `server.py` 的**本地网关**：`/api/*` 全部路由、多维查询与服务端聚合用法 |
+| §8 | `mihealth_client.py` 的 Python 调用示例 |
+| §9 | 数据真实性说明（单位、增量值、睡眠分期编码、多数据源） |
+
+本地网关常用入口（`uv run python server.py` 之后）：
+
+```
+GET  /api/health              认证状态 + 存储模式 + 行数
+GET  /api/overview            今日摘要
+GET  /api/families            数据清单：family/key 行数、时间范围、数据源
+GET  /api/db/<family>         多维查询：key × 时间窗 × 数据源 × 去重开关 × 排序
+GET  /api/agg/<family>/<key>  服务端聚合：内层字段 × sum/max/min/avg × 任意桶宽
+GET  /api/export.csv          任意族/键导出 CSV
+GET  /                        数据看板（含同步按钮与登录面板）
+```
 
 响应统一 `{ok, items, count, has_more}`。
 
-## 数据键（17 种）
-
-`steps` `calories` `sleep` `heart_rate` `stress` `spo2` `intensity`
-`valid_stand` `energy` `goal` `pai` `blood_pressure` `blood_sugar`
-`headset` `weight` `vo2_max` `menstruation`
-
-## 数据说明（消费时注意）
-
-| 项 | 说明 |
-|---|---|
-| 记录单位 | 记录的 `time`/`start_time`/`bedtime` 等是**秒**；接口入参 `startTime/endTime` 是**毫秒**（轨迹库 `start_time` 例外，是毫秒） |
-| 值是增量 | `steps`/`calories` 的 value 是**该分钟增量**，不是当日累计；聚合请自行累加或用 `/api/agg` |
-| 睡眠分期 | 分段 `items[].state`：**2=深睡、3=浅睡、4=REM**（用摘要 `sleep_deep/light/rem_duration` 反向核对确认） |
-| 睡分期时长 | `sleep_deep_duration` 等字段单位是**分钟**，`duration` 与 `bedtime→wake` 差值是**秒** |
-| 运动字段 | 跑步类记录有 79 个字段（跑姿动态、5K~全马预测、跑力指数、心率区间、训练负荷）；`avg_pace` 部分记录为空，可用 `时长÷距离` 推算（秒/公里） |
-| 轨迹 | 记录 value 里**没有坐标**；轨迹是独立资源（`route_info.file` / 轨迹库 `route_id`）。本账号云端 0 条 |
-| 数据源 | 同一分钟可能来自多个 `sid`（手表 / 手机 / App 线），默认查询走 `dedup` 表按最大值收敛；要原始多源请 `dedup=0` |
-
-## 已知限制（如实记录）
-
-| 项 | 状态 |
-|---|---|
-| `healthapp/service/gen_download_url`（FDS 预签名下载） | 服务端断连，未打通；轨迹文件下载暂不可用 |
-| `data/get_latest_fitness_data` | 参数按 bean 对齐仍返回 `-8`；用 `by_time` + `order=desc&limit=1` 等价替代 |
-| `statistics/get_stat_data_by_time` | 参数对齐后仍为空集，本账号无对应功能数据 |
-| GPS 轨迹 / 饮食记录 | 接口齐备，但本账号云端无数据（未开 GPS / 未用饮食记录） |
-
-## 请求签名与加密
-
-```
-nonce       = b64( random(8B) | int32(minutes_since_epoch) )
-sessionKey  = b64( SHA256( b64dec(ssecurity) | b64dec(nonce) ) )   # RC4-drop1024
-data        = b64( RC4(sessionKey, <JSON 参数体>) )
-rc4_hash__  = b64( SHA1(METHOD&path&明文kv&sessionKey) ) → 再 RC4 加密
-signature   = b64( SHA1(METHOD&path&加密kv&sessionKey) )
-_nonce      = nonce
-Cookie: cUserId=...; serviceToken=<长token>; locale=zh_cn
-```
-
-实测要点：
-
-| 现象 | 结论 |
-|---|---|
-| `nextKey` 分页无效 | 服务端认 `next_key`（snake_case）；`nextKey` 静默忽略导致同页重复 |
-| `startTime=0` + nextKey | 游标冻结重复同页；全量需用近期 startTime + next_key 回溯 |
-| `.hlth` cookie `serviceToken=miothealth` | sid 标记；真实 token 在 `sts-hlth` 域 |
-| 同分钟多条 | 分页重叠 + 多 sid 源 → 按 `(sid,time)` 去重取最大 |
-
-详见 [API.md](API.md)。
+数据键共 17 种：`steps` `calories` `sleep` `heart_rate` `stress` `spo2` `intensity`
+`valid_stand` `energy` `goal` `pai` `blood_pressure` `blood_sugar` `headset` `weight`
+`vo2_max` `menstruation`（逐键返回结构见 API.md §4.1）。
 
 ## 目录
 
@@ -260,16 +214,20 @@ tools/
   refresh_credentials.py  # adb 自动重取凭据（含 passToken；base64 传输避开 pty 污染）
   export_all.py           # 全量导出 JSON
   dump_tokens.js          # Frida hook 现场抓 token
-API.md               # 接口文档
+API.md               # 接口文档（认证/协议/端点/网关/客户端/数据口径）
 NOTES.md             # 接口与数据结构笔记
 config.example.json  # 凭据模板
+pyproject.toml       # 依赖与构建（uv 管理，Python >=3.14）
+uv.lock              # 锁定版本，复现用 uv sync --frozen
+.python-version      # 3.15
+src/mihealth_api/    # 预留包骨架
 ```
 
 ## 实现说明
 
 - 数据来自小米运动健康账号的云端服务（`hlth.io.mi.com`），凭证为登录态 Cookie
 - 请求签名与加密按客户端行为实现：`nonce`（随机 + 分钟时间戳）→ `SHA256` 会话密钥 → `RC4`（丢弃前 1024 字节）
-- 接口清单、参数与数据结构见 [API.md](API.md)；接口行为与坑位见其中的"接口行为要点"
+- 接口清单、参数与数据结构见 [API.md](API.md)；实现陷阱见 §2.4、接口实测语义见 §4.5、单位与口径见 §9
 - 只读使用：本工具不修改账号数据（仅同步/查询）
 
 ## License
