@@ -31,12 +31,13 @@ token 取自 `MIH_API_TOKEN` 环境变量，其次 `config.json` 的 `api_token`
 豁免：`/`、`/vendor/*`、`/api/login/captcha`（`<img>` 发不了 header）、`/docs`、
 `/redoc`、`/openapi.json`。
 """
+import asyncio
 import json
 import os
 import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from pathlib import Path
 
@@ -44,7 +45,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
-from . import paths, runtime
+from . import paths, runtime, scheduler
 from .client import AuthError, SCALAR_FIELDS, load_config
 
 CFG = runtime.get_config()
@@ -229,16 +230,30 @@ async def lifespan(app):
         print(f"[auth] token 已启用（前 6 位 {tok[:6]}…）；请求带 X-Api-Token 或 Authorization: Bearer", flush=True)
     _st = runtime.get_store()
     print(f"[gateway] db={_st.path if _st is not None else '(live)'}", flush=True)
-    if MCP_APP is not None:
-        # app.mount() 不会跑子应用的 lifespan，会话管理器必须由宿主驱动
-        from .mcp_server import mcp as _mcp
-        async with _mcp.session_manager.run():
-            yield
+    task = None
+    syncer = scheduler.from_env()          # 内部已捕获解析异常；off 或非法都返回 None
+    if syncer is not None:
+        task = asyncio.create_task(syncer.run(), name="daily-sync")
+        print(f"[auto] 每日自动同步已启用（{syncer.at_text}，{syncer.describe_next()}；"
+              f"关闭用 MIH_DAILY_SYNC=off）", flush=True)
     else:
-        yield
+        print("[auto] 每日自动同步已关闭（MIH_DAILY_SYNC=off）", flush=True)
+    try:
+        if MCP_APP is not None:
+            # app.mount() 不会跑子应用的 lifespan，会话管理器必须由宿主驱动
+            from .mcp_server import mcp as _mcp
+            async with _mcp.session_manager.run():
+                yield
+        else:
+            yield
+    finally:
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
-app = FastAPI(title="Mi Health Gateway", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Mi Health Gateway", version="0.3.1", lifespan=lifespan)
 
 
 @app.exception_handler(HTTPException)

@@ -124,7 +124,7 @@ asyncio.run(main())
 
 | 工具 | 读/写 | 参数 | 返回 |
 |---|---|---|---|
-| `status` | 读 | — | `mode`（`db`/`live`）、`db_path`、`rows`/`raw_rows`、`families`、`cursors`、`sync` 任务状态 |
+| `status` | 读 | — | `mode`（`db`/`live`）、`db_path`、`rows`/`raw_rows`、`families`、`cursors`、`sync` 任务状态。`cursors` 里除了 `wm_fitness`/`wm_sport` 还有 `auto_daily`：网关每日自动增量上次启动的秒级时间戳（见 README「每日自动增量」） |
 | `list_families` | 读 | — | `families[]`（每族行数、时间范围、各键计数）、`sources[]` |
 | `list_keys` | 读 | `family` | 该族的 `keys[]`（key + count）与 `sources[]`（sid + count） |
 | `query_records` | 读 | `family`, `key?`, `start_ms?`, `end_ms?`, `dedup=true`, `sid?`, `order="asc"`, `limit=500` | `items[]`（原始行 + `_t`/`_sid`/`_key`） |

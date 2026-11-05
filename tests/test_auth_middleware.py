@@ -24,6 +24,8 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("MIH_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("MIH_DB", str(tmp_path / "absent.db"))
     monkeypatch.setenv("MIH_API_TOKEN", TOKEN)
+    # 这些用例会 `with TestClient(app)`，也就是真的跑 lifespan；别让调度器起来
+    monkeypatch.setenv("MIH_DAILY_SYNC", "off")
     SV = importlib.reload(SV)
     runtime.reset_store()
     runtime.reload_config()

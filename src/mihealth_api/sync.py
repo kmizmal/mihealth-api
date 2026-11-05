@@ -8,7 +8,9 @@
   mihealth-sync export --family fitness --key steps --csv out.csv
 
 First run:  mihealth-sync backfill     (time-paged full history, all keys)
-After that: mihealth-sync incremental  (cron/任务计划, a handful of requests)
+After that: mihealth-sync incremental  (a handful of requests; the gateway also
+                                        runs it daily on its own — see
+                                        MIH_DAILY_SYNC in scheduler.py)
 
 Incremental strategy
 --------------------

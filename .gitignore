@@ -18,6 +18,7 @@ build/
 
 # 测试与工具产物（注意：不要再用 `test_*.db*` 这类宽规则，会把 tests/ 里的 fixture 吞掉）
 .pytest_cache/
+.pytest-tmproot/
 .coverage
 .coverage.*
 htmlcov/

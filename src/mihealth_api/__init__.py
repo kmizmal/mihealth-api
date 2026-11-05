@@ -12,7 +12,7 @@
 
     from mihealth_api import MiHealthClient, load_config, Store
 """
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from .client import (ApiError, AuthError, MiHealthClient, SCALAR_FIELDS,
                      canonical_number, client_from_config, dedup_items, load_config)

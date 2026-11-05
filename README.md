@@ -61,6 +61,7 @@ uv run mihealth-credentials --db Cookies.db   # 或：离线解析已拷出来�
 uv run mihealth-sync backfill
 
 # 2) 之后定时增量（水位流 + 时间窗补拉，通常只需个位数请求）
+#    网关进程内每天 04:00 自动跑一次；下面这条是手动 / 兜底用
 uv run mihealth-sync incremental
 uv run mihealth-sync status               # 游标与库内行数
 
@@ -102,8 +103,31 @@ uv run mihealth-export                    # 全量导出 JSON（不落库）
 | 限流 | `--min-interval` 控制请求间隔（默认 0.4s），避免触发风控 |
 | 断点续传 | 游标每页落库，中断不丢进度；`INSERT OR REPLACE` 保证重跑幂等 |
 | 401 自愈 | 鉴权失败时**先 `passToken` 免密续期**，失败再回落到 adb 重取；成功后**重试当次请求** |
+| 每日自动增量 | 网关进程内每天定点（默认 `04:00`，本地时区）自动跑一次增量，与手动按钮 / `/api/sync` 共用同一把锁；`MIH_DAILY_SYNC=off` 关闭，`MIH_DAILY_SYNC=07:30` 改时间 |
+| 开机补跑 | 距上次自动同步超过 **20 小时**（关机几天后重开）立刻补跑一次；补跑与当天定点相距不足 12 小时则只跑一次 |
 
 数据库表：`records`（原始行，主键 `family+key+sid+ts`）、`dedup`（写入时维护的物化去重表，主键 `family+key+ts`）、`v_dedup`（指向 `dedup` 的视图）、`sync_state`（游标）。
+
+> `sync_state` 里除了 `wm_*` 游标，还有一行 `auto_daily`（`last_ts` 是上次自动同步启动的**秒级**时间戳），
+> 所以 `mihealth-sync status`、`/api/sync/status` 与 MCP `status` 工具的 `cursors` 里都会看到它 —— 这是有用信息，不是 bug。
+
+#### 每日自动增量：三个需要知道的取舍
+
+- **时间指网关那台机器的本地时区**。本方案假设网关跑在你自己机器上（机器时区 = 你的时区）；
+  若挪到 UTC 的服务器（VPS），`04:00` 会变成北京时间 12:00，必须显式改 `MIH_DAILY_SYNC`。
+- **`job.start()` 成功就立即记账，不等同步结果**。代价：一次因凭据失效失败的夜间同步
+  也会把当天的额度用掉，重启时 `gap < 20h` 不会补跑。失败会在 `/api/sync/status` 的
+  `result.err` 里显式可见，比「每天偷偷重试 100 次」更容易被发现。若不接受这个取舍，
+  得在 `SyncJob._finish()` 里「失败则抹掉 `last_ts`」——那属于改 `runtime.py`，本次没做。
+- **网关不常开时用 `schtasks` 兜底**（方案 B，本仓库**未实现**，只给命令）：
+
+  ```powershell
+  schtasks /Create /TN "mihealth-incremental" /SC HOURLY /MO 6 `
+    /TR "cmd /c cd /d D:\Tools\mihealth-api && uv run mihealth-sync incremental --hours 72" /F
+  ```
+
+  ⚠️ **不要与进程内调度同时开**：两把锁、白跑请求，同步状态还会互相覆盖。
+  用 `schtasks` 时记得 `MIH_DAILY_SYNC=off`。
 
 ## 登录 / 会话（三种方式）
 

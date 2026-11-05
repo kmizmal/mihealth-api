@@ -451,6 +451,7 @@ base64 是纯文本、对行规则免疫；若目标环境无 base64，可 `su -
 | 看板怎么拿到 token | `/` 返回的 HTML 里注入了 `window.__MIH_TOKEN__`（静态文件里是 `<!--MIH_TOKEN-->` 占位符），`api()` / 同步按钮 / 登录面板三处取数自动带 `X-Api-Token`；**`<img src>` 仍走免鉴权的 `/api/login/captcha`** |
 | 参数校验 | 非整数的时间/条数参数返回 `422 {"ok":false,"err":"limit 不是整数: 'abc'"}`；**空串仍按缺省处理**（`?start=&end=` 不会 422） |
 | 错误体 | 与旧版一致：`{"ok":false,"err":"..."}`，不套 FastAPI 的 `{"detail": ...}` |
+| 每日自动增量 | `MIH_DAILY_SYNC`（默认 `04:00`，本地时区；`off`/`none`/空串关闭）。网关 lifespan 里起一个 `daily-sync` 协程，到点调 `runtime.get_sync_job(...).start(hours=72)` —— 与 `/api/sync`、MCP `sync_now` 共用同一把锁。启动日志有 `[auto] 每日自动同步已启用（04:00，下次 …）`；距上次超过 20 小时则立即补跑一次。参数非法只降级成「关闭 + 一行警告」，不会让网关起不来 |
 
 MCP 端点（Streamable HTTP，可选依赖）见 [MCP.md](MCP.md)：`POST /mcp/`，
 7 个工具（`status` / `list_families` / `list_keys` / `query_records` / `aggregate` /
@@ -459,7 +460,7 @@ MCP 端点（Streamable HTTP，可选依赖）见 [MCP.md](MCP.md)：`POST /mcp/
 | 路由 | 说明 |
 |---|---|
 | `GET /api/health` | 认证状态 + 存储模式 + 行数；字段：`ok` `mode` `db` `host` `cuser_id` `token_prefix` `ssecurity_set` `auth` `rows` `cursors`（`auth` 为 `ok`/`expired`/`error`） |
-| `POST /api/sync` · `GET /api/sync/status` | 触发增量同步 / 查询进度（看板"同步"按钮用它） |
+| `POST /api/sync` · `GET /api/sync/status` | 触发增量同步 / 查询进度（看板"同步"按钮用它）。`cursors` 里除 `wm_fitness` / `wm_sport` 外还会有一行 `auto_daily`（`last_ts` 为上次**自动**同步启动的秒级时间戳），是每日自动增量的记账，见上表 |
 | `GET /api/families` | **数据清单**：各 family/key 行数与时间范围 + 数据源（手表/手机/App 线） |
 | `GET /api/db/<family>` | **通用多维查询**：`?key=&start=&end=&sid=&dedup=0/1&order=&limit=&fields=meta` |
 | `GET /api/db/<family>/keys` | 该族有哪些 key 及行数、数据源 |

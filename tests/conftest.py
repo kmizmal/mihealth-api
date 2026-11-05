@@ -6,6 +6,17 @@ import sqlite3
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_daily_sync(monkeypatch):
+    """默认关掉每日自动同步。
+
+    `with TestClient(app)` 会真的跑 lifespan（`tests/test_auth_middleware.py`
+    有 19 处），默认开着的话每个用例都会起一个调度协程去连云端、打真凭据。
+    需要打开它的用例自己 `monkeypatch.setenv("MIH_DAILY_SYNC", "04:00")` 即可覆盖。
+    """
+    monkeypatch.setenv("MIH_DAILY_SYNC", "off")
+
+
 @pytest.fixture
 def cfg_file(tmp_path):
     """一份最小可用的 config.json（值都是假的，不会拿去发请求）。"""
